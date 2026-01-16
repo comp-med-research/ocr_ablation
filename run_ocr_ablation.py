@@ -7,6 +7,7 @@ Compare multiple OCR engines on PDF documents.
 
 import argparse
 import json
+import statistics
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -99,12 +100,12 @@ def run_single_model(
         
         # Run OCR on each page
         all_texts = []
-        total_time = 0.0
+        page_times = []
         
         for i, img in enumerate(tqdm(images, desc=f"Processing pages")):
             text, elapsed = model.run_ocr(img)
             all_texts.append(text)
-            total_time += elapsed
+            page_times.append(elapsed)
         
         # Combine all text
         full_text = "\n\n--- Page Break ---\n\n".join(all_texts)
@@ -113,19 +114,43 @@ def run_single_model(
         output_file = output_dir / f"{model_name}_output.txt"
         output_file.write_text(full_text, encoding="utf-8")
         
+        # Calculate timing statistics
+        total_time = sum(page_times)
+        mean_time = statistics.mean(page_times)
+        
+        # For std/percentiles, need at least 2 data points
+        if len(page_times) >= 2:
+            std_time = statistics.stdev(page_times)
+            sorted_times = sorted(page_times)
+            n = len(sorted_times)
+            p25 = sorted_times[int(n * 0.25)] if n >= 4 else sorted_times[0]
+            p75 = sorted_times[int(n * 0.75)] if n >= 4 else sorted_times[-1]
+        else:
+            std_time = 0.0
+            p25 = page_times[0] if page_times else 0.0
+            p75 = page_times[0] if page_times else 0.0
+        
         result = {
             "model": model.name,
             "status": "success",
             "uses_gpu": model.uses_gpu,
             "pages_processed": len(images),
             "total_time_seconds": round(total_time, 3),
-            "avg_time_per_page": round(total_time / len(images), 3),
+            "time_per_page": {
+                "mean": round(mean_time, 3),
+                "std": round(std_time, 3),
+                "min": round(min(page_times), 3),
+                "max": round(max(page_times), 3),
+                "p25": round(p25, 3),
+                "p75": round(p75, 3),
+            },
+            "page_times": [round(t, 3) for t in page_times],
             "total_chars": len(full_text),
             "output_file": str(output_file),
         }
         
         gpu_status = "GPU" if model.uses_gpu else "CPU"
-        print(f"✓ Completed in {total_time:.2f}s ({total_time/len(images):.2f}s per page) [{gpu_status}]")
+        print(f"✓ Completed in {total_time:.2f}s (mean: {mean_time:.2f}s ± {std_time:.2f}s per page) [{gpu_status}]")
         print(f"  Output saved to: {output_file}")
         
     except Exception as e:
@@ -235,12 +260,16 @@ def print_summary(results: dict) -> None:
     for r in results["results"]:
         gpu_str = "Yes" if r.get("uses_gpu", False) else "No"
         if r["status"] == "success":
+            tpp = r["time_per_page"]
+            # Show mean ± std format
+            time_str = f"{tpp['mean']:.2f}s ± {tpp['std']:.2f}s"
             table_data.append([
                 r["model"],
                 "✓",
                 gpu_str,
                 f"{r['total_time_seconds']:.2f}s",
-                f"{r['avg_time_per_page']:.2f}s",
+                time_str,
+                f"[{tpp['p25']:.2f}, {tpp['p75']:.2f}]",
                 f"{r['total_chars']:,}",
             ])
         else:
@@ -250,10 +279,11 @@ def print_summary(results: dict) -> None:
                 gpu_str,
                 "-",
                 "-",
-                f"Error: {r.get('error', 'Unknown')[:30]}",
+                "-",
+                f"Error: {r.get('error', 'Unknown')[:25]}",
             ])
     
-    headers = ["Model", "Status", "GPU", "Total Time", "Time/Page", "Output Chars"]
+    headers = ["Model", "Status", "GPU", "Total Time", "Time/Page (μ±σ)", "IQR [p25,p75]", "Chars"]
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
 
