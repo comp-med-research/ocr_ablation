@@ -9,6 +9,8 @@ import argparse
 import json
 import statistics
 import sys
+import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -17,6 +19,20 @@ import fitz  # PyMuPDF
 from PIL import Image
 from tqdm import tqdm
 from tabulate import tabulate
+
+# Optional: memory tracking
+try:
+    import tracemalloc
+    HAS_TRACEMALLOC = True
+except ImportError:
+    HAS_TRACEMALLOC = False
+
+# Optional: GPU memory tracking
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
 
 from ocr_models import (
     TesseractOCR,
@@ -28,6 +44,39 @@ from ocr_models import (
     RolmOCR,
     DeepSeekOCR,
 )
+
+
+def get_gpu_memory_mb() -> Optional[float]:
+    """Get current GPU memory usage in MB. Returns None if not available."""
+    if not HAS_TORCH or not torch.cuda.is_available():
+        return None
+    try:
+        # Get memory for all GPUs, return max
+        max_mem = 0
+        for i in range(torch.cuda.device_count()):
+            mem = torch.cuda.max_memory_allocated(i) / (1024 * 1024)  # Convert to MB
+            max_mem = max(max_mem, mem)
+        return max_mem
+    except Exception:
+        return None
+
+
+def reset_gpu_memory_stats() -> None:
+    """Reset GPU memory tracking statistics."""
+    if HAS_TORCH and torch.cuda.is_available():
+        try:
+            for i in range(torch.cuda.device_count()):
+                torch.cuda.reset_peak_memory_stats(i)
+        except Exception:
+            pass
+
+
+def get_process_memory_mb() -> float:
+    """Get current process memory usage in MB."""
+    import resource
+    # Get memory in KB, convert to MB
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    return usage.ru_maxrss / 1024  # Linux reports in KB
 
 
 # Registry of available OCR models
@@ -89,6 +138,10 @@ def run_single_model(
     print(f"Running: {model_name.upper()}")
     print(f"{'='*60}")
     
+    # Track memory before
+    ram_before = get_process_memory_mb()
+    reset_gpu_memory_stats()
+    
     try:
         # Instantiate model
         model_class = OCR_MODELS[model_name.lower()]
@@ -113,6 +166,11 @@ def run_single_model(
         # Save output
         output_file = output_dir / f"{model_name}_output.txt"
         output_file.write_text(full_text, encoding="utf-8")
+        
+        # Measure memory after processing
+        ram_after = get_process_memory_mb()
+        peak_ram_mb = ram_after - ram_before  # Approximate increase
+        peak_gpu_mb = get_gpu_memory_mb()
         
         # Calculate timing statistics
         total_time = sum(page_times)
@@ -145,12 +203,20 @@ def run_single_model(
                 "p75": round(p75, 3),
             },
             "page_times": [round(t, 3) for t in page_times],
+            "memory": {
+                "peak_ram_mb": round(peak_ram_mb, 1),
+                "peak_gpu_mb": round(peak_gpu_mb, 1) if peak_gpu_mb is not None else None,
+            },
             "total_chars": len(full_text),
             "output_file": str(output_file),
         }
         
         gpu_status = "GPU" if model.uses_gpu else "CPU"
+        mem_str = f"RAM: {peak_ram_mb:.0f}MB"
+        if peak_gpu_mb is not None:
+            mem_str += f", VRAM: {peak_gpu_mb:.0f}MB"
         print(f"✓ Completed in {total_time:.2f}s (mean: {mean_time:.2f}s ± {std_time:.2f}s per page) [{gpu_status}]")
+        print(f"  Memory: {mem_str}")
         print(f"  Output saved to: {output_file}")
         
     except Exception as e:
@@ -261,15 +327,22 @@ def print_summary(results: dict) -> None:
         gpu_str = "Yes" if r.get("uses_gpu", False) else "No"
         if r["status"] == "success":
             tpp = r["time_per_page"]
+            mem = r.get("memory", {})
             # Show mean ± std format
             time_str = f"{tpp['mean']:.2f}s ± {tpp['std']:.2f}s"
+            # Memory string
+            ram_mb = mem.get("peak_ram_mb", 0)
+            gpu_mb = mem.get("peak_gpu_mb")
+            mem_str = f"{ram_mb:.0f}"
+            gpu_mem_str = f"{gpu_mb:.0f}" if gpu_mb is not None else "-"
             table_data.append([
                 r["model"],
                 "✓",
                 gpu_str,
                 f"{r['total_time_seconds']:.2f}s",
                 time_str,
-                f"[{tpp['p25']:.2f}, {tpp['p75']:.2f}]",
+                mem_str,
+                gpu_mem_str,
                 f"{r['total_chars']:,}",
             ])
         else:
@@ -280,10 +353,11 @@ def print_summary(results: dict) -> None:
                 "-",
                 "-",
                 "-",
-                f"Error: {r.get('error', 'Unknown')[:25]}",
+                "-",
+                f"Error: {r.get('error', 'Unknown')[:20]}",
             ])
     
-    headers = ["Model", "Status", "GPU", "Total Time", "Time/Page (μ±σ)", "IQR [p25,p75]", "Chars"]
+    headers = ["Model", "Status", "GPU", "Total Time", "Time/Page (μ±σ)", "RAM MB", "VRAM MB", "Chars"]
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
 
