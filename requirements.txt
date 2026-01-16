@@ -18,7 +18,7 @@ torchvision>=0.16.0
 # Nougat for academic documents
 nougat-ocr>=0.1.0
 
-# For RolmOCR (uses vLLM or transformers)
+# For RolmOCR and DeepSeek (uses vLLM or transformers)
 vllm>=0.2.0
 
 # Utilities

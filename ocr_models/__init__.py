@@ -7,6 +7,7 @@ from .nougat_ocr import NougatOCR
 from .doctr_ocr import DocTROCR
 from .trocr_model import TrOCRModel
 from .rolm_ocr import RolmOCR
+from .deepseek_ocr import DeepSeekOCR
 
 __all__ = [
     "BaseOCR",
@@ -17,5 +18,6 @@ __all__ = [
     "DocTROCR",
     "TrOCRModel",
     "RolmOCR",
+    "DeepSeekOCR",
 ]
 

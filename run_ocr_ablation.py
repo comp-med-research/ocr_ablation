@@ -25,6 +25,7 @@ from ocr_models import (
     DocTROCR,
     TrOCRModel,
     RolmOCR,
+    DeepSeekOCR,
 )
 
 
@@ -37,6 +38,7 @@ OCR_MODELS = {
     "doctr": DocTROCR,
     "trocr": TrOCRModel,
     "rolmocr": RolmOCR,
+    "deepseek": DeepSeekOCR,
 }
 
 

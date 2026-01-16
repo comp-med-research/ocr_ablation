@@ -13,6 +13,7 @@ A framework for comparing multiple OCR engines on PDF documents.
 | **DocTR** | Mindee's document text recognition |
 | **TrOCR** | Microsoft's transformer-based OCR |
 | **RolmOCR** | Reducto's vision-language OCR model |
+| **DeepSeek** | DeepSeek-VL2 vision-language model for OCR |
 
 ## Installation
 
@@ -51,7 +52,7 @@ python run_ocr_ablation.py your_document.pdf
 ### Run Specific Models
 
 ```bash
-python run_ocr_ablation.py document.pdf --models tesseract paddleocr doctr
+python run_ocr_ablation.py document.pdf --models tesseract paddleocr deepseek
 ```
 
 ### Process Specific Pages
@@ -101,9 +102,10 @@ ocr_results_<timestamp>/
 
 ## Notes
 
-- **GPU Acceleration**: Nougat, TrOCR, and RolmOCR benefit significantly from GPU
-- **Memory**: Some models (especially Nougat, RolmOCR) require significant RAM/VRAM
+- **GPU Acceleration**: Nougat, TrOCR, RolmOCR, and DeepSeek benefit significantly from GPU
+- **Memory**: Some models (especially Nougat, RolmOCR, DeepSeek) require significant RAM/VRAM
 - **First Run**: Models download weights on first use (may take time)
+- **Privacy**: All inference runs locally. No images or text are sent to external servers.
 
 ## License
 
