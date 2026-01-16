@@ -33,6 +33,11 @@ class RolmOCR(BaseOCR):
         self.use_vllm = use_vllm and torch.cuda.is_available()
         self._processor = None
 
+    @property
+    def uses_gpu(self) -> bool:
+        """Return whether this model is using GPU acceleration."""
+        return self.device == "cuda" or self.use_vllm
+
     def load_model(self) -> None:
         """Load RolmOCR model."""
         if self.use_vllm:

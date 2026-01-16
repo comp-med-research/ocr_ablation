@@ -90,14 +90,30 @@ ocr_results_<timestamp>/
 ## Example Results
 
 ```
-+------------+--------+-------------+-----------+---------------+
-| Model      | Status | Total Time  | Time/Page | Output Chars  |
-+============+========+=============+===========+===============+
-| Tesseract  | ✓      | 2.34s       | 0.78s     | 12,456        |
-| PaddleOCR  | ✓      | 3.21s       | 1.07s     | 12,789        |
-| DocTR      | ✓      | 4.56s       | 1.52s     | 12,234        |
-| Nougat     | ✓      | 15.23s      | 5.08s     | 13,102        |
-+------------+--------+-------------+-----------+---------------+
++------------+--------+-----+-------------+-----------+---------------+
+| Model      | Status | GPU | Total Time  | Time/Page | Output Chars  |
++============+========+=====+=============+===========+===============+
+| Tesseract  | ✓      | No  | 2.34s       | 0.78s     | 12,456        |
+| PaddleOCR  | ✓      | No  | 3.21s       | 1.07s     | 12,789        |
+| DocTR      | ✓      | No  | 4.56s       | 1.52s     | 12,234        |
+| Nougat     | ✓      | Yes | 8.12s       | 2.71s     | 13,102        |
+| DeepSeek   | ✓      | Yes | 6.45s       | 2.15s     | 13,456        |
++------------+--------+-----+-------------+-----------+---------------+
+```
+
+The `results.json` file includes full details for each model:
+
+```json
+{
+  "model": "DeepSeek",
+  "status": "success",
+  "uses_gpu": true,
+  "pages_processed": 3,
+  "total_time_seconds": 6.45,
+  "avg_time_per_page": 2.15,
+  "total_chars": 13456,
+  "output_file": "ocr_results_20260116/deepseek_output.txt"
+}
 ```
 
 ## Notes

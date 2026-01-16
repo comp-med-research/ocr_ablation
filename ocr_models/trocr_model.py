@@ -32,6 +32,11 @@ class TrOCRModel(BaseOCR):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self._processor = None
 
+    @property
+    def uses_gpu(self) -> bool:
+        """Return whether this model is using GPU acceleration."""
+        return self.device == "cuda"
+
     def load_model(self) -> None:
         """Load TrOCR model."""
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel

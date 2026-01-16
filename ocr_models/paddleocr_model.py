@@ -23,6 +23,11 @@ class PaddleOCRModel(BaseOCR):
         self.lang = lang
         self.use_gpu = use_gpu
 
+    @property
+    def uses_gpu(self) -> bool:
+        """Return whether this model is using GPU acceleration."""
+        return self.use_gpu
+
     def load_model(self) -> None:
         """Load PaddleOCR model."""
         from paddleocr import PaddleOCR

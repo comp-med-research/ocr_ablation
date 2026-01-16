@@ -47,6 +47,11 @@ class DeepSeekOCR(BaseOCR):
         self._processor = None
         self._tokenizer = None
 
+    @property
+    def uses_gpu(self) -> bool:
+        """Return whether this model is using GPU acceleration."""
+        return self.device == "cuda"
+
     def load_model(self) -> None:
         """
         Load DeepSeek-VL2 model locally.

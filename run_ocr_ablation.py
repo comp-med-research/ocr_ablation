@@ -116,6 +116,7 @@ def run_single_model(
         result = {
             "model": model.name,
             "status": "success",
+            "uses_gpu": model.uses_gpu,
             "pages_processed": len(images),
             "total_time_seconds": round(total_time, 3),
             "avg_time_per_page": round(total_time / len(images), 3),
@@ -123,13 +124,15 @@ def run_single_model(
             "output_file": str(output_file),
         }
         
-        print(f"✓ Completed in {total_time:.2f}s ({total_time/len(images):.2f}s per page)")
+        gpu_status = "GPU" if model.uses_gpu else "CPU"
+        print(f"✓ Completed in {total_time:.2f}s ({total_time/len(images):.2f}s per page) [{gpu_status}]")
         print(f"  Output saved to: {output_file}")
         
     except Exception as e:
         result = {
             "model": model_name,
             "status": "error",
+            "uses_gpu": False,
             "error": str(e),
         }
         print(f"✗ Error: {e}")
@@ -230,10 +233,12 @@ def print_summary(results: dict) -> None:
     
     table_data = []
     for r in results["results"]:
+        gpu_str = "Yes" if r.get("uses_gpu", False) else "No"
         if r["status"] == "success":
             table_data.append([
                 r["model"],
                 "✓",
+                gpu_str,
                 f"{r['total_time_seconds']:.2f}s",
                 f"{r['avg_time_per_page']:.2f}s",
                 f"{r['total_chars']:,}",
@@ -242,12 +247,13 @@ def print_summary(results: dict) -> None:
             table_data.append([
                 r["model"],
                 "✗",
+                gpu_str,
                 "-",
                 "-",
                 f"Error: {r.get('error', 'Unknown')[:30]}",
             ])
     
-    headers = ["Model", "Status", "Total Time", "Time/Page", "Output Chars"]
+    headers = ["Model", "Status", "GPU", "Total Time", "Time/Page", "Output Chars"]
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
 

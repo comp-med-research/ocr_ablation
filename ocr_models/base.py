@@ -16,6 +16,11 @@ class BaseOCR(ABC):
         self._model = None
         self._is_loaded = False
 
+    @property
+    def uses_gpu(self) -> bool:
+        """Return whether this model is using GPU acceleration."""
+        return False  # Default to False, subclasses can override
+
     @abstractmethod
     def load_model(self) -> None:
         """Load the OCR model into memory."""
