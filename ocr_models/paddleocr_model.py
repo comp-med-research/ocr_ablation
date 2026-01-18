@@ -11,13 +11,13 @@ class PaddleOCRModel(BaseOCR):
 
     name = "PaddleOCR"
 
-    def __init__(self, lang: str = "en", use_gpu: bool = False):
+    def __init__(self, lang: str = "en", use_gpu: bool = True):
         """
         Initialize PaddleOCR.
         
         Args:
             lang: Language code ('en', 'ch', 'fr', etc.)
-            use_gpu: Whether to use GPU acceleration
+            uses_gpu: Whether to use GPU acceleration
         """
         super().__init__()
         self.lang = lang
@@ -34,8 +34,8 @@ class PaddleOCRModel(BaseOCR):
 
         self._model = PaddleOCR(
             lang=self.lang,
-            use_gpu=self.use_gpu,
-            show_log=False
+            device ="gpu",
+            # show_log=False
         )
         self._is_loaded = True
 
@@ -45,20 +45,17 @@ class PaddleOCRModel(BaseOCR):
         img_array = np.array(image)
 
         # Run OCR
-        result = self._model.ocr(img_array, cls=True)
+        result = self._model.predict(img_array)
 
         # Extract text from results
         if result is None or len(result) == 0:
             return ""
-
+        
         lines = []
-        for page_result in result:
-            if page_result is None:
-                continue
-            for line in page_result:
-                if line and len(line) >= 2:
-                    text = line[1][0] if isinstance(line[1], tuple) else line[1]
-                    lines.append(text)
+        for res in result:
+            text = res["rec_texts"]
+            for t in text:
+                lines.append(t)
 
         return "\n".join(lines)
 
