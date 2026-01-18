@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import fitz  # PyMuPDF
+import pymupdf as fitz # PyMuPDF
 from PIL import Image
 from tqdm import tqdm
 from tabulate import tabulate
@@ -37,12 +37,14 @@ except ImportError:
 from ocr_models import (
     TesseractOCR,
     PaddleOCRModel,
-    KrakenOCR,
     NougatOCR,
     DocTROCR,
     TrOCRModel,
     RolmOCR,
     DeepSeekOCR,
+    DonutOCR,
+    PPStructureOCR,
+    PaddleOCRVL,
 )
 
 
@@ -83,12 +85,14 @@ def get_process_memory_mb() -> float:
 OCR_MODELS = {
     "tesseract": TesseractOCR,
     "paddleocr": PaddleOCRModel,
-    "kraken": KrakenOCR,
     "nougat": NougatOCR,
     "doctr": DocTROCR,
     "trocr": TrOCRModel,
     "rolmocr": RolmOCR,
     "deepseek": DeepSeekOCR,
+    "donut": DonutOCR,
+    "ppstructure": PPStructureOCR,
+    "paddleocr-vl": PaddleOCRVL,
 }
 
 

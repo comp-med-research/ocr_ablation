@@ -2,7 +2,6 @@
 
 from PIL import Image
 import torch
-
 from .base import BaseOCR
 
 
@@ -63,7 +62,7 @@ class NougatOCR(BaseOCR):
 
         # Decode
         sequence = self._processor.batch_decode(
-            outputs.sequences,
+            outputs,
             skip_special_tokens=True
         )[0]
 

@@ -58,13 +58,13 @@ class RolmOCR(BaseOCR):
 
     def _load_transformers_model(self) -> None:
         """Load model using transformers."""
-        from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+        from transformers import AutoProcessor, AutoModelForImageTextToText
 
         self._processor = AutoProcessor.from_pretrained(
             self.model_tag,
             trust_remote_code=True
         )
-        self._model = Qwen2VLForConditionalGeneration.from_pretrained(
+        self._model = AutoModelForImageTextToText.from_pretrained(
             self.model_tag,
             torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
             device_map="auto" if self.device == "cuda" else None,

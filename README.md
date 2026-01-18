@@ -8,12 +8,14 @@ A framework for comparing multiple OCR engines on PDF documents.
 |-------|-------------|
 | **Tesseract** | Classic open-source OCR engine |
 | **PaddleOCR** | Baidu's multilingual OCR toolkit |
-| **Kraken** | Specialized for historical documents |
 | **Nougat** | Meta's layout-aware academic document OCR |
 | **DocTR** | Mindee's document text recognition |
 | **TrOCR** | Microsoft's transformer-based OCR |
 | **RolmOCR** | Reducto's vision-language OCR model |
 | **DeepSeek** | DeepSeek-VL2 vision-language model for OCR |
+| **Donut** | Naver's Document Understanding Transformer |
+| **PP-StructureV3** | PaddlePaddle's document structure analysis |
+| **PaddleOCR-VL** | PaddlePaddle's vision-language OCR model |
 
 ## Installation
 
@@ -33,12 +35,6 @@ sudo apt install tesseract-ocr poppler-utils
 
 ```bash
 pip install -r requirements.txt
-```
-
-### 3. Download Kraken Models (optional)
-
-```bash
-kraken get default
 ```
 
 ## Usage

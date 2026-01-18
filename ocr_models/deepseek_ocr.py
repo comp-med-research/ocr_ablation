@@ -23,7 +23,7 @@ class DeepSeekOCR(BaseOCR):
 
     def __init__(
         self,
-        model_tag: str = "deepseek-ai/deepseek-vl2-tiny",
+        model_tag: str = "deepseek-ai/DeepSeek-OCR",
         device: str = None,
         local_files_only: bool = False,
     ):
@@ -31,10 +31,7 @@ class DeepSeekOCR(BaseOCR):
         Initialize DeepSeek OCR.
         
         Args:
-            model_tag: HuggingFace model tag or local path. Options:
-                - "deepseek-ai/deepseek-vl2-tiny" (fastest, ~3B params)
-                - "deepseek-ai/deepseek-vl2-small" (balanced, ~16B params)
-                - "deepseek-ai/deepseek-vl2" (best quality, ~27B params)
+            model_tag: deepseek-ai/DeepSeek-OCR
                 - Or a local path to downloaded model weights
             device: Device to run on ('cuda', 'cpu', or None for auto)
             local_files_only: If True, only use cached/local model files (no network).
@@ -54,7 +51,7 @@ class DeepSeekOCR(BaseOCR):
 
     def load_model(self) -> None:
         """
-        Load DeepSeek-VL2 model locally.
+        Load DeepSeek-OCR model locally.
         
         Model weights are loaded from local cache or downloaded once from
         HuggingFace Hub if not cached. All inference runs locally.
