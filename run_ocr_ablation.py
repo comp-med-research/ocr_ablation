@@ -130,10 +130,19 @@ def pdf_to_images(pdf_path: Path, dpi: int = 300) -> list[Image.Image]:
 def run_single_model(
     model_name: str,
     images: list[Image.Image],
-    output_dir: Path
+    output_dir: Path,
+    pdf_path: Path = None,
+    pages: list[int] = None
 ) -> dict:
     """
     Run a single OCR model on all images.
+    
+    Args:
+        model_name: Name of the model to run
+        images: List of PIL images (used if model doesn't support native PDF)
+        output_dir: Directory for output files
+        pdf_path: Path to original PDF (for models with native PDF support)
+        pages: List of page indices to process (for native PDF processing)
     
     Returns:
         Dictionary with results and metrics
@@ -151,18 +160,30 @@ def run_single_model(
         model_class = OCR_MODELS[model_name.lower()]
         model = model_class()
         
+        # Set output directory for models that support it
+        if hasattr(model, 'set_output_dir'):
+            model.set_output_dir(output_dir)
+        
         # Load model
         print(f"Loading {model.name} model...")
         model.load_model()
         
-        # Run OCR on each page
-        all_texts = []
-        page_times = []
+        # Check if model supports native PDF processing
+        supports_native_pdf = getattr(model, 'supports_native_pdf', False)
         
-        for i, img in enumerate(tqdm(images, desc=f"Processing pages")):
-            text, elapsed = model.run_ocr(img)
-            all_texts.append(text)
-            page_times.append(elapsed)
+        if supports_native_pdf and pdf_path is not None:
+            # Use native PDF processing (more efficient)
+            print(f"  Using native PDF processing...")
+            all_texts, page_times = model.run_ocr_on_pdf(pdf_path, pages)
+        else:
+            # Fall back to image-by-image processing
+            all_texts = []
+            page_times = []
+            
+            for i, img in enumerate(tqdm(images, desc=f"Processing pages")):
+                text, elapsed = model.run_ocr(img)
+                all_texts.append(text)
+                page_times.append(elapsed)
         
         # Combine all text
         full_text = "\n\n--- Page Break ---\n\n".join(all_texts)
@@ -170,6 +191,11 @@ def run_single_model(
         # Save output
         output_file = output_dir / f"{model_name}_output.txt"
         output_file.write_text(full_text, encoding="utf-8")
+        
+        # Save JSON output for models that support it (e.g., DocTR)
+        if hasattr(model, 'get_json_string'):
+            json_file = output_dir / f"{model_name}_output.json"
+            json_file.write_text(model.get_json_string(), encoding="utf-8")
         
         # Measure memory after processing
         ram_after = get_process_memory_mb()
@@ -196,7 +222,7 @@ def run_single_model(
             "model": model.name,
             "status": "success",
             "uses_gpu": model.uses_gpu,
-            "pages_processed": len(images),
+            "pages_processed": len(all_texts),
             "total_time_seconds": round(total_time, 3),
             "time_per_page": {
                 "mean": round(mean_time, 3),
@@ -306,7 +332,7 @@ def run_ablation(
     }
     
     for model_name in models:
-        result = run_single_model(model_name, images, output_dir)
+        result = run_single_model(model_name, images, output_dir, pdf_path=pdf_path, pages=pages)
         results["results"].append(result)
     
     # Save results summary
@@ -314,14 +340,14 @@ def run_ablation(
     with open(results_file, "w") as f:
         json.dump(results, f, indent=2)
     
-    # Print summary table
-    print_summary(results)
+    # Print and save summary table
+    print_summary(results, output_dir)
     
     return results
 
 
-def print_summary(results: dict) -> None:
-    """Print a summary table of results."""
+def print_summary(results: dict, output_dir: Path = None) -> None:
+    """Print a summary table of results and optionally save to file."""
     print(f"\n{'='*60}")
     print("SUMMARY")
     print(f"{'='*60}")
@@ -362,7 +388,25 @@ def print_summary(results: dict) -> None:
             ])
     
     headers = ["Model", "Status", "GPU", "Total Time", "Time/Page (μ±σ)", "RAM MB", "VRAM MB", "Chars"]
-    print(tabulate(table_data, headers=headers, tablefmt="grid"))
+    
+    # Print to console
+    summary_table = tabulate(table_data, headers=headers, tablefmt="grid")
+    print(summary_table)
+    
+    # Save to file if output_dir provided
+    if output_dir is not None:
+        summary_file = output_dir / "summary.txt"
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write("OCR ABLATION STUDY - SUMMARY\n")
+            f.write("=" * 60 + "\n\n")
+            f.write(f"PDF: {results['metadata']['pdf_path']}\n")
+            f.write(f"Timestamp: {results['metadata']['timestamp']}\n")
+            f.write(f"Pages processed: {results['metadata']['processed_pages']} / {results['metadata']['total_pages']}\n")
+            f.write(f"DPI: {results['metadata']['dpi']}\n")
+            f.write("\n")
+            f.write(summary_table)
+            f.write("\n")
+        print(f"\nSummary saved to: {summary_file}")
 
 
 def main():

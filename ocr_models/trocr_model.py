@@ -13,7 +13,7 @@ class TrOCRModel(BaseOCR):
 
     def __init__(
         self,
-        model_tag: str = "microsoft/trocr-large-printed",
+        model_tag: str = "microsoft/trocr-base-printed",
         device: str = None
     ):
         """

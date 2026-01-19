@@ -6,6 +6,9 @@ external servers. The model weights are downloaded once from HuggingFace Hub
 and cached locally. All inference happens on your local machine.
 """
 
+import tempfile
+import os
+from pathlib import Path
 from PIL import Image
 import torch
 
@@ -14,7 +17,7 @@ from .base import BaseOCR
 
 class DeepSeekOCR(BaseOCR):
     """
-    DeepSeek OCR - Using DeepSeek-VL2 vision-language model for OCR.
+    DeepSeek OCR - Using DeepSeek-OCR vision-language model for OCR.
     
     All processing is done locally. No images or text are sent to external servers.
     """
@@ -26,23 +29,24 @@ class DeepSeekOCR(BaseOCR):
         model_tag: str = "deepseek-ai/DeepSeek-OCR",
         device: str = None,
         local_files_only: bool = False,
+        prompt_mode: str = "markdown",
     ):
         """
         Initialize DeepSeek OCR.
         
         Args:
-            model_tag: deepseek-ai/DeepSeek-OCR
-                - Or a local path to downloaded model weights
+            model_tag: deepseek-ai/DeepSeek-OCR or a local path to downloaded model weights
             device: Device to run on ('cuda', 'cpu', or None for auto)
             local_files_only: If True, only use cached/local model files (no network).
-                              Set to True for air-gapped environments.
+            prompt_mode: "markdown" for structured output, "free" for plain OCR
         """
         super().__init__()
         self.model_tag = model_tag
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.local_files_only = local_files_only
-        self._processor = None
+        self.prompt_mode = prompt_mode
         self._tokenizer = None
+        self._temp_dir = None
 
     @property
     def uses_gpu(self) -> bool:
@@ -56,24 +60,44 @@ class DeepSeekOCR(BaseOCR):
         Model weights are loaded from local cache or downloaded once from
         HuggingFace Hub if not cached. All inference runs locally.
         """
-        from transformers import AutoModelForCausalLM, AutoProcessor
+        from transformers import AutoModel, AutoTokenizer
 
-        self._processor = AutoProcessor.from_pretrained(
+        self._tokenizer = AutoTokenizer.from_pretrained(
             self.model_tag,
             trust_remote_code=True,
             local_files_only=self.local_files_only,
         )
+
+        if self._tokenizer.pad_token is None and self._tokenizer.eos_token is not None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
         
-        self._model = AutoModelForCausalLM.from_pretrained(
+        # Build model kwargs
+        model_kwargs = {
+            "trust_remote_code": True,
+            "local_files_only": self.local_files_only,
+            "use_safetensors": True,
+            "attn_implementation": "eager",
+            "torch_dtype": torch.bfloat16 if self.device=="cuda" else None,
+            "device_map": "cuda" if self.device=="cuda" else None
+            
+        }
+        
+        # if self.use_flash_attention:
+        #     model_kwargs["_attn_implementation"] = "eager"
+        
+        self._model = AutoModel.from_pretrained(
             self.model_tag,
-            torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
-            device_map="auto" if self.device == "cuda" else None,
-            trust_remote_code=True,
-            local_files_only=self.local_files_only,
+            **model_kwargs
         )
         
-        if self.device == "cpu":
-            self._model.to(self.device)
+        # Move to device with appropriate dtype
+        if self.device == "cuda":
+            self._model = self._model.eval().cuda().to(torch.bfloat16)
+        else:
+            self._model = self._model.eval()
+        
+        # Create temp directory for intermediate files
+        self._temp_dir = tempfile.mkdtemp(prefix="deepseek_ocr_")
         
         self._is_loaded = True
 
@@ -83,40 +107,41 @@ class DeepSeekOCR(BaseOCR):
         if image.mode != "RGB":
             image = image.convert("RGB")
 
-        # Build the conversation format for DeepSeek-VL2
-        conversation = [
-            {
-                "role": "<|User|>",
-                "content": "<image>\nExtract all text from this image. Return only the extracted text, preserving the original layout as much as possible.",
-                "images": [image],
-            },
-            {"role": "<|Assistant|>", "content": ""},
-        ]
+        # Save image to temp file (DeepSeek-OCR expects a file path)
+        # temp_image_path = os.path.join(self._temp_dir, "temp_input.jpg")
+        # image.save(temp_image_path, "JPEG", quality=95)
 
-        # Prepare inputs using the processor
-        inputs = self._processor(
-            conversations=conversation,
-            images=[image],
-            force_batchify=True,
-            return_tensors="pt"
-        ).to(self.device)
+        # Select prompt based on mode
+        if self.prompt_mode == "markdown":
+            prompt = "<image>\n<|grounding|>Convert the document to markdown. "
+        else:
+            prompt = "<image>\nFree OCR. "
 
-        # Generate
-        with torch.no_grad():
-            outputs = self._model.generate(
-                **inputs,
-                max_new_tokens=4096,
-                do_sample=False,
-                pad_token_id=self._processor.tokenizer.eos_token_id,
-            )
-
-        # Decode the output
-        # Get only the generated tokens (exclude input)
-        generated_tokens = outputs[0][inputs.input_ids.shape[1]:]
-        output_text = self._processor.tokenizer.decode(
-            generated_tokens,
-            skip_special_tokens=True
+        # Run inference
+        output_text = self._model.infer(
+            self._tokenizer,
+            prompt=prompt,
+            image_file=image,
+            # output_path=self._temp_dir,
+            base_size=1024,
+            image_size=640,
+            crop_mode=False,
+            save_results=False,
+            test_compress=False,
         )
 
-        return output_text.strip()
+        # Clean up temp image
+        # if os.path.exists(temp_image_path):
+        #     os.remove(temp_image_path)
+
+        if output_text is None:
+            return ""
+        
+        return output_text.strip() if isinstance(output_text, str) else str(output_text)
+
+    def __del__(self):
+        """Clean up temp directory on deletion."""
+        if self._temp_dir and os.path.exists(self._temp_dir):
+            import shutil
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
 
