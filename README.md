@@ -16,6 +16,9 @@ A framework for comparing multiple OCR engines on PDF documents.
 | **Donut** | Naver's Document Understanding Transformer |
 | **PP-StructureV3** | PaddlePaddle's document structure analysis |
 | **PaddleOCR-VL** | PaddlePaddle's vision-language OCR model |
+| **Docling** | Document conversion library for gen AI (DS4SD) |
+| **Marker** | Fast PDF/image to Markdown (Datalab) |
+| **MinerU** | Magic-PDF document understanding (OpenDataLab) |
 
 ## Installation
 
@@ -128,12 +131,16 @@ The `results.json` file includes full timing and memory statistics:
 }
 ```
 
+## Privacy & data locality
+
+**All models run fully on your machine.** No documents, images, or text are sent to any external server. Weights are downloaded once (e.g. from HuggingFace) and cached locally; all OCR inference runs locally.
+
 ## Notes
 
 - **GPU Acceleration**: Nougat, TrOCR, RolmOCR, and DeepSeek benefit significantly from GPU
 - **Memory**: Some models (especially Nougat, RolmOCR, DeepSeek) require significant RAM/VRAM
 - **First Run**: Models download weights on first use (may take time)
-- **Privacy**: All inference runs locally. No images or text are sent to external servers.
+- **Docling, Marker, MinerU**: Install via `requirements.txt`. Marker and MinerU use CLI tools (`marker_single`/`marker`, `magic-pdf`).
 
 ## License
 

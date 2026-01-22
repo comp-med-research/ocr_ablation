@@ -45,6 +45,9 @@ from ocr_models import (
     DonutOCR,
     PPStructureOCR,
     PaddleOCRVL,
+    DoclingOCR,
+    MarkerOCR,
+    MinerUOCR,
 )
 
 
@@ -93,6 +96,9 @@ OCR_MODELS = {
     "donut": DonutOCR,
     "ppstructure": PPStructureOCR,
     "paddleocr-vl": PaddleOCRVL,
+    "docling": DoclingOCR,
+    "marker": MarkerOCR,
+    "mineru": MinerUOCR,
 }
 
 
