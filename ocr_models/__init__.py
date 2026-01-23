@@ -12,7 +12,6 @@ from .pp_structure_ocr import PPStructureOCR
 from .paddleocr_vl import PaddleOCRVL
 from .docling_ocr import DoclingOCR
 from .marker_ocr import MarkerOCR
-from .mineru_ocr import MinerUOCR
 
 __all__ = [
     "BaseOCR",
@@ -28,6 +27,5 @@ __all__ = [
     "PaddleOCRVL",
     "DoclingOCR",
     "MarkerOCR",
-    "MinerUOCR",
 ]
 

@@ -18,7 +18,6 @@ A framework for comparing multiple OCR engines on PDF documents.
 | **PaddleOCR-VL** | PaddlePaddle's vision-language OCR model |
 | **Docling** | Document conversion library for gen AI (DS4SD) |
 | **Marker** | Fast PDF/image to Markdown (Datalab) |
-| **MinerU** | Magic-PDF document understanding (OpenDataLab) |
 
 ## Installation
 
@@ -140,7 +139,7 @@ The `results.json` file includes full timing and memory statistics:
 - **GPU Acceleration**: Nougat, TrOCR, RolmOCR, and DeepSeek benefit significantly from GPU
 - **Memory**: Some models (especially Nougat, RolmOCR, DeepSeek) require significant RAM/VRAM
 - **First Run**: Models download weights on first use (may take time)
-- **Docling, Marker, MinerU**: Install via `requirements.txt`. Marker and MinerU use CLI tools (`marker_single`/`marker`, `magic-pdf`).
+- **Docling, Marker**: Install via `requirements.txt`. Marker uses CLI tools (`marker_single` or `marker`).
 
 ## License
 

@@ -47,7 +47,6 @@ from ocr_models import (
     PaddleOCRVL,
     DoclingOCR,
     MarkerOCR,
-    MinerUOCR,
 )
 
 
@@ -98,7 +97,6 @@ OCR_MODELS = {
     "paddleocr-vl": PaddleOCRVL,
     "docling": DoclingOCR,
     "marker": MarkerOCR,
-    "mineru": MinerUOCR,
 }
 
 
@@ -224,10 +222,13 @@ def run_single_model(
             p25 = page_times[0] if page_times else 0.0
             p75 = page_times[0] if page_times else 0.0
         
+        # GPU: use model's claim, or infer from measured VRAM (avoids "No" when VRAM was used)
+        uses_gpu = model.uses_gpu or (peak_gpu_mb is not None and peak_gpu_mb > 0)
+
         result = {
             "model": model.name,
             "status": "success",
-            "uses_gpu": model.uses_gpu,
+            "uses_gpu": uses_gpu,
             "pages_processed": len(all_texts),
             "total_time_seconds": round(total_time, 3),
             "time_per_page": {
@@ -247,7 +248,7 @@ def run_single_model(
             "output_file": str(output_file),
         }
         
-        gpu_status = "GPU" if model.uses_gpu else "CPU"
+        gpu_status = "GPU" if uses_gpu else "CPU"
         mem_str = f"RAM: {peak_ram_mb:.0f}MB"
         if peak_gpu_mb is not None:
             mem_str += f", VRAM: {peak_gpu_mb:.0f}MB"
