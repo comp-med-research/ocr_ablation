@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# Dedicated venv: MinerU + PaddleOCR + DeepSeek-OCR-2 (+ ablation runner)
+# ---------------------------------------------------------------------------
+#
+#   cd ocr_ablation
+#   python3 -m venv .venv-ocr-stack
+#   source .venv-ocr-stack/bin/activate   # Windows: .venv-ocr-stack\Scripts\activate
+#
+# Install PyTorch for YOUR GPU (DeepSeek-OCR-2 README: CUDA 11.8 + torch 2.6 example):
+#   pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
+#       --index-url https://download.pytorch.org/whl/cu118
+#
+# CPU-only (slow for OCR-2 / MinerU):
+#   pip install torch torchvision torchaudio
+#
+# Then:
+#   pip install -r requirements-venv-ocr-stack.txt
+#
+# Optional (CUDA, faster attention for OCR-2 — build may take minutes):
+#   pip install flash-attn==2.7.3 --no-build-isolation
+#
+# Paddle: ``paddleocr`` does not install ``paddle`` — you need one of:
+#   pip install paddlepaddle          # CPU (below)
+#   pip install paddlepaddle-gpu ...  # see https://www.paddlepaddle.org.cn/install/quick
+#
+# ---------------------------------------------------------------------------
+
+# DeepSeek-OCR-2 + MinerU VLM paths need a coherent transformers/accelerate stack.
+# Hub code may reference older LLaMA helpers; our loader uses eager first to avoid flash-only imports.
+# If load still fails, try: pip install 'transformers==4.46.3' (DeepSeek-OCR-2 upstream pin).
+transformers>=4.51.1,<5.0
+tokenizers>=0.20.0
+accelerate>=0.26.0
+einops
+easydict
+addict
+img2pdf
+PyMuPDF>=1.23.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Ablation runner
+tqdm>=4.66.0
+tabulate>=0.9.0
+pytesseract>=0.3.10
+
+# Paddle runtime (required for ``import paddle`` inside PaddleOCR)
+paddlepaddle>=3.0.0
+
+# PaddleOCR (``paddleocr`` pulls base ``paddlex`` only)
+paddleocr>=2.7.0
+# ``ppstructure`` + ``paddleocr-vl`` need PaddleX with the ``ocr`` extra; without it, pipeline
+# creation fails with: DependencyError … run ``pip install "paddlex[ocr]==<version>"``.
+paddlex[ocr]>=3.4.0,<4
+
+# MinerU + common layout deps (see https://opendatalab.github.io/MinerU/ )
+mineru
+doclayout-yolo
+ultralytics
+
+# Other OCR models you may still run from the same venv (optional, large)
+# python-doctr>=0.7.0
+# docling>=2.50.0
+#
+# Marker (marker-pdf) is NOT listed here on purpose: current ``marker-pdf`` pins
+#   Pillow<11,>=10.1.0
+# while **MinerU** requires **Pillow>=11**. Pip cannot satisfy both in one environment.
+# Use Marker from ``requirements-venv-marker.txt`` (``.venv-marker``) or a main ``.venv``
+# that does not also need MinerU. The ablation runner resolves ``marker_single`` next to
+# ``sys.executable`` once installed.
+#
+# marker-pdf>=1.0.0   # do not add alongside mineru until marker supports Pillow>=11
+#
+# Paddle OCR stack tuning (see ocr_models/paddle_utils.py):
+#   export PADDLEOCR_OCR_VERSION=PP-OCRv5    # or PP-OCRv4 — used by paddleocr + ppstructure
+#   export PADDLEOCR_VL_PIPELINE_VERSION=v1.5   # or v1 — PaddleOCR-VL pipeline
+# CPU + Paddle 3.3+: oneDNN/PIR crash is avoided by default (enable_mkldnn=False in wrappers).
+#   export PADDLEOCR_ENABLE_MKLDNN=1   # opt-in oneDNN if you pin paddlepaddle==3.2.2 or use GPU paths only
+# Verbose per-page output (res.print(), save_to_img/json under native/.../paddleocr_verbose/):
+#   export PADDLEOCR_VERBOSE=1
+# PaddleOCR-VL: async VLM queue (default off in our wrapper — avoids empty ``vlm`` worker errors):
+#   export PADDLEOCR_VL_USE_QUEUES=1

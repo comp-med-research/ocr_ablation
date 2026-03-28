@@ -28,6 +28,9 @@ venv/
 ENV/
 env/
 .venv/
+.venv-ocr-stack/
+.venv-deepseek/
+.venv-marker/
 
 # IDE
 .idea/
@@ -52,3 +55,8 @@ models/
 # Test PDFs (user should add their own)
 *.pdf
 
+# OCR outputs
+results/
+
+test_cases15/
+streamlit_demo/

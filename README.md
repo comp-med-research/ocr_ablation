@@ -10,7 +10,6 @@ A framework for comparing multiple OCR engines on PDF documents.
 | **PaddleOCR** | Baidu's multilingual OCR toolkit |
 | **Nougat** | Meta's layout-aware academic document OCR |
 | **DocTR** | Mindee's document text recognition |
-| **TrOCR** | Microsoft's transformer-based OCR |
 | **RolmOCR** | Reducto's vision-language OCR model |
 | **DeepSeek** | DeepSeek-VL2 vision-language model for OCR |
 | **Donut** | Naver's Document Understanding Transformer |
@@ -18,6 +17,8 @@ A framework for comparing multiple OCR engines on PDF documents.
 | **PaddleOCR-VL** | PaddlePaddle's vision-language OCR model |
 | **Docling** | Document conversion library for gen AI (DS4SD) |
 | **Marker** | Fast PDF/image to Markdown (Datalab) |
+| **qwen35-vl-9b** / **qwen35-9b** | [Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) (`QWEN35_MODEL_ID` / legacy `QWEN35_VL_MODEL_ID` to override); install `requirements-qwen35.txt` or `pip install -U "transformers>=4.57.0"` (see model card if PyPI lags) |
+| **llama32-vl-11b** | Meta Llama 3.2 11B Vision Instruct (gated Hub repo; needs HF token) |
 
 ## Installation
 
@@ -33,7 +34,35 @@ brew install tesseract poppler
 sudo apt install tesseract-ocr poppler-utils
 ```
 
-### 2. Install Python Dependencies
+### 2. Python virtual environment (recommended)
+
+From the `ocr_ablation` directory:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Optional Streamlit demo: `pip install -r requirements-demo.txt`
+
+Optional **vLLM** (RolmOCR fast GPU path only): see `requirements-vllm.txt`. It is not in the main requirements file because some vLLM builds pin a Torch version your index may not ship.
+
+The `.venv/` directory is gitignored.
+
+**Dedicated environments (fewer dependency clashes):**
+
+| Venv (example) | Requirements file | Typical models |
+|----------------|-------------------|----------------|
+| `.venv-marker` | `requirements-venv-marker.txt` | **marker** — isolated from MinerU’s `Pillow>=11` and from a crowded HF `.venv` |
+| `.venv-ocr-stack` | `requirements-venv-ocr-stack.txt` | **mineru**, **paddleocr**, **deepseek**, **ppstructure**, **paddleocr-vl** |
+| `.venv-deepseek` | `requirements-venv-deepseek.txt` | **deepseek** only (strict `transformers` pin) |
+
+**ppstructure** and **paddleocr-vl** need PaddleX’s OCR optional dependencies (`paddlex[ocr]`); those requirement files include it so `pip install -r …` pulls them in.
+
+### 3. Install Python Dependencies (without venv)
+
+If you prefer a global or other environment:
 
 ```bash
 pip install -r requirements.txt
@@ -119,6 +148,18 @@ This project is set up to benchmark **whole-page** recognition, not crop-based O
 
 We do **not** bundle OmniDocBench; keep it as a **dependency or side-by-side checkout** if you use their dataset or full metric stack. Our code is intentionally smaller and **LS-ground-truth-centric** until you export to their JSON or adopt their pages.
 
+### Streamlit demo (text matching + NED)
+
+Interactive examples for **normalization**, **paragraph splitting**, **DP alignment**, and **per-region diffs**:
+
+```bash
+pip install -r requirements-demo.txt
+cd ocr_ablation
+streamlit run streamlit_demo/app.py
+```
+
+Built-in scenarios need no data files; you can also upload a Label Studio export and paste full-page prediction text for one `task_id`.
+
 ## Example Results
 
 ```
@@ -170,7 +211,7 @@ The `results.json` file includes full timing and memory statistics:
 
 ## Notes
 
-- **GPU Acceleration**: Nougat, TrOCR, RolmOCR, and DeepSeek benefit significantly from GPU
+- **GPU Acceleration**: Nougat, RolmOCR, and DeepSeek benefit significantly from GPU
 - **Memory**: Some models (especially Nougat, RolmOCR, DeepSeek) require significant RAM/VRAM
 - **First Run**: Models download weights on first use (may take time)
 - **Docling, Marker**: Install via `requirements.txt`. Marker uses CLI tools (`marker_single` or `marker`).

@@ -68,18 +68,23 @@ class DocTROCR(BaseOCR):
 
         # Load PDF natively with DocTR
         with tqdm(total=1, desc="Loading PDF", leave=False) as pbar:
-            doc = DocumentFile.from_pdf(str(pdf_path))
+            doc_full = DocumentFile.from_pdf(str(pdf_path))
             pbar.update(1)
 
-        # Filter pages if specified
+        n = len(doc_full)
         if pages is not None:
-            doc = [doc[i] for i in pages if i < len(doc)]
+            page_indices = [i for i in pages if 0 <= i < n]
+            doc = [doc_full[i] for i in page_indices]
+        else:
+            page_indices = list(range(n))
+            doc = [doc_full[i] for i in page_indices]
 
         # Process pages one at a time to get accurate per-page timings
         all_texts = []
         page_times = []
         
-        for i, page_doc in enumerate(tqdm(doc, desc="Processing pages")):
+        for local_i, page_doc in enumerate(tqdm(doc, desc="Processing pages")):
+            self.set_page_index(page_indices[local_i])
             # Process single page
             start_time = time.perf_counter()
             result = self._model([page_doc])
@@ -88,7 +93,8 @@ class DocTROCR(BaseOCR):
             
             # Store JSON export
             self._json_exports.append(result.export())
-            
+            self._flush_doctr_native_page(result)
+
             # Extract text from this page
             for page in result.pages:
                 lines = []
@@ -119,7 +125,22 @@ class DocTROCR(BaseOCR):
                     line_text = " ".join(word.value for word in line.words)
                     lines.append(line_text)
 
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        self._flush_doctr_native_page(result)
+        return text
+
+    def _flush_doctr_native_page(self, result) -> None:
+        d = self.native_page_dir()
+        if d is None:
+            return
+        try:
+            blob = result.export()
+            (d / "doctr_export.json").write_text(
+                json.dumps(blob, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     def get_json_export(self) -> list:
         """Get all JSON exports from OCR runs.

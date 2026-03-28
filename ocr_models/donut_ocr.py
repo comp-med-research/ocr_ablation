@@ -1,5 +1,7 @@
 """Donut OCR implementation - Document Understanding Transformer."""
 
+import json
+
 from PIL import Image
 import torch
 from .base import BaseOCR
@@ -90,6 +92,13 @@ class DonutOCR(BaseOCR):
         # Try to parse as JSON-like structure and extract text
         sequence = self._extract_text_from_output(sequence)
 
+        self.write_native_text(sequence, "donut.txt")
+        nd = self.native_page_dir()
+        if nd is not None:
+            (nd / "donut_raw.json").write_text(
+                json.dumps({"extracted_text": sequence, "model_tag": self.model_tag}),
+                encoding="utf-8",
+            )
         return sequence
 
     def _extract_text_from_output(self, sequence: str) -> str:

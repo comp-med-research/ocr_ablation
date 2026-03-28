@@ -42,5 +42,26 @@ class TesseractOCR(BaseOCR):
             lang=self.lang,
             config=self.config
         )
-        return text.strip()
+        text = text.strip()
+        nd = self.native_page_dir()
+        if nd is not None:
+            (nd / "tesseract.txt").write_text(text, encoding="utf-8")
+            try:
+                tsv = pytesseract.image_to_data(
+                    image, lang=self.lang, config=self.config, output_type=pytesseract.Output.STRING
+                )
+                (nd / "tesseract.tsv").write_text(tsv, encoding="utf-8")
+            except Exception:
+                pass
+            try:
+                hocr = pytesseract.image_to_pdf_or_hocr(
+                    image, extension="hocr", lang=self.lang, config=self.config
+                )
+                if isinstance(hocr, (bytes, bytearray)):
+                    (nd / "tesseract.hocr").write_bytes(hocr)
+                else:
+                    (nd / "tesseract.hocr").write_text(str(hocr), encoding="utf-8")
+            except Exception:
+                pass
+        return text
 

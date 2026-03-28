@@ -38,6 +38,9 @@ class RolmOCR(BaseOCR):
         """Return whether this model is using GPU acceleration."""
         return self.device == "cuda" or self.use_vllm
 
+    def is_markdown_primary(self) -> bool:
+        return True
+
     def load_model(self) -> None:
         """Load RolmOCR model."""
         if self.use_vllm:
@@ -97,7 +100,9 @@ class RolmOCR(BaseOCR):
         )
 
         outputs = self._model.generate([prompt], sampling_params)
-        return outputs[0].outputs[0].text
+        text = outputs[0].outputs[0].text
+        self.write_native_text(text, "rolmocr.md")
+        return text
 
     def _run_transformers_inference(self, image: Image.Image) -> str:
         """Run inference using transformers."""
@@ -143,7 +148,9 @@ class RolmOCR(BaseOCR):
             skip_special_tokens=True
         )[0]
 
-        return output_text.strip()
+        text = output_text.strip()
+        self.write_native_text(text, "rolmocr.md")
+        return text
 
     def _build_prompt(self, img_base64: str) -> str:
         """Build prompt for vLLM inference."""

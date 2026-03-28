@@ -15,7 +15,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import pymupdf as fitz # PyMuPDF
 from PIL import Image
 from tqdm import tqdm
 from tabulate import tabulate
@@ -39,7 +38,6 @@ from ocr_models import (
     PaddleOCRModel,
     NougatOCR,
     DocTROCR,
-    TrOCRModel,
     RolmOCR,
     DeepSeekOCR,
     DonutOCR,
@@ -47,6 +45,11 @@ from ocr_models import (
     PaddleOCRVL,
     DoclingOCR,
     MarkerOCR,
+    GlmOcrModel,
+    ChandraOCR,
+    MinerUOCR,
+    Qwen35VLOCR,
+    Llama32VisionOCR,
 )
 
 
@@ -87,9 +90,9 @@ def get_process_memory_mb() -> float:
 OCR_MODELS = {
     "tesseract": TesseractOCR,
     "paddleocr": PaddleOCRModel,
+    "paddleocr-v5": PaddleOCRModel,  # alias; default stack is PP-OCRv5 (see PADDLEOCR_OCR_VERSION)
     "nougat": NougatOCR,
     "doctr": DocTROCR,
-    "trocr": TrOCRModel,
     "rolmocr": RolmOCR,
     "deepseek": DeepSeekOCR,
     "donut": DonutOCR,
@@ -97,7 +100,105 @@ OCR_MODELS = {
     "paddleocr-vl": PaddleOCRVL,
     "docling": DoclingOCR,
     "marker": MarkerOCR,
+    "glm-ocr": GlmOcrModel,
+    "chandra2": ChandraOCR,
+    "mineru": MinerUOCR,
+    "qwen35-vl-9b": Qwen35VLOCR,
+    "qwen35-9b": Qwen35VLOCR,
+    "llama32-vl-11b": Llama32VisionOCR,
 }
+
+# Per-page JSON saved next to output_dir by PP-Structure / PaddleOCR-VL (prefix + page index).
+JSON_SIDECAR_GLOBS: dict[str, str] = {
+    "ppstructure": "ppstructure_page_*.json",
+    "paddleocr-vl": "paddleocr-vl_page_*.json",
+}
+
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"})
+
+# When using ``--images-dir`` without ``-m``, run this subset (override with ``-m``).
+DEFAULT_IMAGES_DIR_MODELS = [
+    "tesseract",
+    "doctr",
+    "docling",
+    "donut",
+]
+
+
+def merge_json_sidecars(output_dir: Path, glob_pattern: str) -> str | None:
+    """Load every matching JSON file and return a single JSON array string, or None if none found."""
+    paths = sorted(output_dir.glob(glob_pattern), key=lambda p: p.name)
+    if not paths:
+        return None
+    items: list = []
+    for p in paths:
+        try:
+            items.append(json.loads(p.read_text(encoding="utf-8")))
+        except json.JSONDecodeError:
+            items.append({"_file": p.name, "_error": "invalid json"})
+    return json.dumps(items, ensure_ascii=False, indent=2)
+
+
+def write_combined_exports(
+    model,
+    model_name: str,
+    output_dir: Path,
+    full_text: str,
+    *,
+    write_combined_txt: bool,
+    write_combined_md: bool,
+    also_txt_for_markdown: bool,
+) -> dict:
+    """
+    Write ``*_output.txt`` and/or ``*_output.md`` (or ``.mmd`` for Nougat) plus ``*_output.json``.
+
+    Markdown-primary models default to a combined ``*_output.md`` (or model-specific extension
+    such as ``.mmd``) only — no duplicate ``.txt`` unless ``also_txt_for_markdown`` is True.
+    """
+    slug = model_name.lower()
+    md_primary = model.is_markdown_primary()
+    out_paths: list[str] = []
+    primary: str | None = None
+
+    if md_primary:
+        if write_combined_md:
+            ext = model.combined_markdown_extension()
+            p = output_dir / f"{slug}_output{ext}"
+            p.write_text(full_text, encoding="utf-8")
+            out_paths.append(str(p))
+            primary = str(p)
+        if also_txt_for_markdown and write_combined_txt:
+            p = output_dir / f"{slug}_output.txt"
+            p.write_text(full_text, encoding="utf-8")
+            out_paths.append(str(p))
+            if primary is None:
+                primary = str(p)
+    else:
+        if write_combined_txt:
+            p = output_dir / f"{slug}_output.txt"
+            p.write_text(full_text, encoding="utf-8")
+            out_paths.append(str(p))
+            primary = str(p)
+
+    json_path: str | None = None
+    if hasattr(model, "get_json_string"):
+        js = model.get_json_string()
+        if js is not None:
+            jp = output_dir / f"{slug}_output.json"
+            jp.write_text(js, encoding="utf-8")
+            json_path = str(jp)
+    if json_path is None and slug in JSON_SIDECAR_GLOBS:
+        merged = merge_json_sidecars(output_dir, JSON_SIDECAR_GLOBS[slug])
+        if merged:
+            jp = output_dir / f"{slug}_output.json"
+            jp.write_text(merged, encoding="utf-8")
+            json_path = str(jp)
+
+    return {
+        "output_files": out_paths,
+        "output_file": primary,
+        "output_json": json_path,
+    }
 
 
 def pdf_to_images(pdf_path: Path, dpi: int = 300) -> list[Image.Image]:
@@ -111,6 +212,11 @@ def pdf_to_images(pdf_path: Path, dpi: int = 300) -> list[Image.Image]:
     Returns:
         List of PIL Images, one per page
     """
+    try:
+        import pymupdf as fitz  # PyMuPDF
+    except ImportError as e:
+        raise ImportError("PDF mode requires PyMuPDF: pip install PyMuPDF") from e
+
     images = []
     doc = fitz.open(pdf_path)
     
@@ -131,12 +237,119 @@ def pdf_to_images(pdf_path: Path, dpi: int = 300) -> list[Image.Image]:
     return images
 
 
+def load_images_from_dir(dir_path: Path) -> tuple[list[Image.Image], list[str]]:
+    """
+    Load all images under ``dir_path``, sorted by filename.
+
+    Returns:
+        (images, basenames) with matching indices.
+    """
+    paths = sorted(
+        p
+        for p in dir_path.iterdir()
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+    )
+    if not paths:
+        raise FileNotFoundError(
+            f"No images in {dir_path} (allowed extensions: {sorted(IMAGE_EXTENSIONS)})"
+        )
+    images: list[Image.Image] = []
+    names: list[str] = []
+    for p in paths:
+        with Image.open(p) as im:
+            images.append(im.convert("RGB"))
+        names.append(p.name)
+    return images, names
+
+
+def run_ablation_on_images(
+    image_dir: Path,
+    output_dir: Path,
+    models: Optional[list[str]] = None,
+    native_exports: bool = True,
+    write_combined_txt: bool = True,
+    write_combined_md: bool = True,
+    also_txt_for_markdown: bool = False,
+) -> dict:
+    """
+    Run OCR on every image in a directory (sorted by name). No PDF / PyMuPDF required.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if models is None:
+        models = list(DEFAULT_IMAGES_DIR_MODELS)
+    else:
+        for m in models:
+            if m.lower() not in OCR_MODELS:
+                print(f"Warning: Unknown model '{m}', skipping")
+        models = [m for m in models if m.lower() in OCR_MODELS]
+
+    images, source_names = load_images_from_dir(image_dir)
+    page_indices = list(range(len(images)))
+
+    print("OCR Ablation Study (image folder)")
+    print("===================================")
+    print(f"Image directory: {image_dir.resolve()}")
+    print(f"Files: {len(images)}")
+    print(f"Output: {output_dir}")
+    print(f"Models: {', '.join(models)}")
+
+    if images:
+        safe0 = source_names[0].replace(".", "_")
+        sample_path = output_dir / f"sample_{safe0}.png"
+        images[0].save(sample_path)
+        print(f"Sample saved: {sample_path}")
+
+    results = {
+        "metadata": {
+            "image_dir": str(image_dir.resolve()),
+            "source_files": source_names,
+            "timestamp": datetime.now().isoformat(),
+            "total_pages": len(images),
+            "processed_pages": len(images),
+            "dpi": None,
+            "native_exports": native_exports,
+            "write_combined_txt": write_combined_txt,
+            "write_combined_md": write_combined_md,
+            "also_txt_for_markdown": also_txt_for_markdown,
+        },
+        "results": [],
+    }
+
+    for model_name in models:
+        result = run_single_model(
+            model_name,
+            images,
+            output_dir,
+            pdf_path=None,
+            pages=None,
+            page_indices=page_indices,
+            native_exports=native_exports,
+            write_combined_txt=write_combined_txt,
+            write_combined_md=write_combined_md,
+            also_txt_for_markdown=also_txt_for_markdown,
+        )
+        results["results"].append(result)
+
+    results_file = output_dir / "results.json"
+    with open(results_file, "w") as f:
+        json.dump(results, f, indent=2)
+
+    print_summary(results, output_dir)
+    return results
+
+
 def run_single_model(
     model_name: str,
     images: list[Image.Image],
     output_dir: Path,
     pdf_path: Path = None,
-    pages: list[int] = None
+    pages: list[int] = None,
+    page_indices: list[int] | None = None,
+    native_exports: bool = True,
+    write_combined_txt: bool = True,
+    write_combined_md: bool = True,
+    also_txt_for_markdown: bool = False,
 ) -> dict:
     """
     Run a single OCR model on all images.
@@ -146,7 +359,12 @@ def run_single_model(
         images: List of PIL images (used if model doesn't support native PDF)
         output_dir: Directory for output files
         pdf_path: Path to original PDF (for models with native PDF support)
-        pages: List of page indices to process (for native PDF processing)
+        pages: Page indices to process for native PDF engines (0-indexed; same as CLI ``--pages``).
+        page_indices: Maps each entry in ``images`` to its source PDF page index (for native export paths).
+        native_exports: When True, write per-page artifacts under ``output_dir/native/<model>/``.
+        write_combined_txt: For plain-text models, write ``*_output.txt``.
+        write_combined_md: For Markdown-primary models, write combined text (``.md`` or model-specific).
+        also_txt_for_markdown: If True, also write ``*_output.txt`` when the model is Markdown-primary.
     
     Returns:
         Dictionary with results and metrics
@@ -163,6 +381,10 @@ def run_single_model(
         # Instantiate model
         model_class = OCR_MODELS[model_name.lower()]
         model = model_class()
+
+        slug = model_name.lower()
+        if native_exports:
+            model.configure_native_exports(output_dir, slug)
         
         # Set output directory for models that support it
         if hasattr(model, 'set_output_dir'):
@@ -184,22 +406,26 @@ def run_single_model(
             all_texts = []
             page_times = []
             
-            for i, img in enumerate(tqdm(images, desc=f"Processing pages")):
+            for local_i, img in enumerate(tqdm(images, desc=f"Processing pages")):
+                pidx = page_indices[local_i] if page_indices is not None else local_i
+                model.set_page_index(pidx)
                 text, elapsed = model.run_ocr(img)
                 all_texts.append(text)
                 page_times.append(elapsed)
         
         # Combine all text
         full_text = "\n\n--- Page Break ---\n\n".join(all_texts)
-        
-        # Save output
-        output_file = output_dir / f"{model_name}_output.txt"
-        output_file.write_text(full_text, encoding="utf-8")
-        
-        # Save JSON output for models that support it (e.g., DocTR)
-        if hasattr(model, 'get_json_string'):
-            json_file = output_dir / f"{model_name}_output.json"
-            json_file.write_text(model.get_json_string(), encoding="utf-8")
+
+        export_info = write_combined_exports(
+            model,
+            model_name,
+            output_dir,
+            full_text,
+            write_combined_txt=write_combined_txt,
+            write_combined_md=write_combined_md,
+            also_txt_for_markdown=also_txt_for_markdown,
+        )
+        output_file = export_info.get("output_file")
         
         # Measure memory after processing
         ram_after = get_process_memory_mb()
@@ -245,8 +471,12 @@ def run_single_model(
                 "peak_gpu_mb": round(peak_gpu_mb, 1) if peak_gpu_mb is not None else None,
             },
             "total_chars": len(full_text),
-            "output_file": str(output_file),
+            "output_file": output_file,
+            "output_files": export_info["output_files"],
+            "output_json": export_info.get("output_json"),
         }
+        if native_exports:
+            result["native_exports_dir"] = str((output_dir / "native" / slug).resolve())
         
         gpu_status = "GPU" if uses_gpu else "CPU"
         mem_str = f"RAM: {peak_ram_mb:.0f}MB"
@@ -254,7 +484,14 @@ def run_single_model(
             mem_str += f", VRAM: {peak_gpu_mb:.0f}MB"
         print(f"✓ Completed in {total_time:.2f}s (mean: {mean_time:.2f}s ± {std_time:.2f}s per page) [{gpu_status}]")
         print(f"  Memory: {mem_str}")
-        print(f"  Output saved to: {output_file}")
+        for p in export_info["output_files"]:
+            print(f"  Combined output: {p}")
+        if not export_info["output_files"]:
+            print("  No combined text/md file written (disabled or empty).")
+        if export_info.get("output_json"):
+            print(f"  JSON output: {export_info['output_json']}")
+        if native_exports:
+            print(f"  Native exports: {result.get('native_exports_dir', '')}")
         
     except Exception as e:
         result = {
@@ -273,7 +510,11 @@ def run_ablation(
     output_dir: Path,
     models: Optional[list[str]] = None,
     pages: Optional[list[int]] = None,
-    dpi: int = 300
+    dpi: int = 300,
+    native_exports: bool = True,
+    write_combined_txt: bool = True,
+    write_combined_md: bool = True,
+    also_txt_for_markdown: bool = False,
 ) -> dict:
     """
     Run OCR ablation study on a PDF.
@@ -284,6 +525,8 @@ def run_ablation(
         models: List of model names to run (None = all)
         pages: List of page numbers to process (None = all, 0-indexed)
         dpi: Resolution for PDF rendering
+        native_exports: Enable per-model native artifacts under ``output_dir/native/``.
+        write_combined_txt / write_combined_md / also_txt_for_markdown: See ``run_single_model``.
         
     Returns:
         Dictionary with all results
@@ -313,11 +556,13 @@ def run_ablation(
     all_images = pdf_to_images(pdf_path, dpi=dpi)
     print(f"  Total pages: {len(all_images)}")
     
-    # Select specific pages if requested
+    # Select specific pages if requested (keep aligned page_indices for native exports)
     if pages is not None:
-        images = [all_images[i] for i in pages if i < len(all_images)]
-        print(f"  Selected pages: {pages}")
+        page_indices = [i for i in pages if 0 <= i < len(all_images)]
+        images = [all_images[i] for i in page_indices]
+        print(f"  Selected pages: {pages} (using {page_indices})")
     else:
+        page_indices = None
         images = all_images
     
     # Save sample image for reference
@@ -334,12 +579,27 @@ def run_ablation(
             "total_pages": len(all_images),
             "processed_pages": len(images),
             "dpi": dpi,
+            "native_exports": native_exports,
+            "write_combined_txt": write_combined_txt,
+            "write_combined_md": write_combined_md,
+            "also_txt_for_markdown": also_txt_for_markdown,
         },
         "results": []
     }
     
     for model_name in models:
-        result = run_single_model(model_name, images, output_dir, pdf_path=pdf_path, pages=pages)
+        result = run_single_model(
+            model_name,
+            images,
+            output_dir,
+            pdf_path=pdf_path,
+            pages=pages,
+            page_indices=page_indices,
+            native_exports=native_exports,
+            write_combined_txt=write_combined_txt,
+            write_combined_md=write_combined_md,
+            also_txt_for_markdown=also_txt_for_markdown,
+        )
         results["results"].append(result)
     
     # Save results summary
@@ -404,12 +664,17 @@ def print_summary(results: dict, output_dir: Path = None) -> None:
     if output_dir is not None:
         summary_file = output_dir / "summary.txt"
         with open(summary_file, "w", encoding="utf-8") as f:
+            meta = results["metadata"]
             f.write("OCR ABLATION STUDY - SUMMARY\n")
             f.write("=" * 60 + "\n\n")
-            f.write(f"PDF: {results['metadata']['pdf_path']}\n")
-            f.write(f"Timestamp: {results['metadata']['timestamp']}\n")
-            f.write(f"Pages processed: {results['metadata']['processed_pages']} / {results['metadata']['total_pages']}\n")
-            f.write(f"DPI: {results['metadata']['dpi']}\n")
+            if meta.get("pdf_path"):
+                f.write(f"PDF: {meta['pdf_path']}\n")
+            elif meta.get("image_dir"):
+                f.write(f"Image directory: {meta['image_dir']}\n")
+            f.write(f"Timestamp: {meta['timestamp']}\n")
+            f.write(f"Pages processed: {meta['processed_pages']} / {meta['total_pages']}\n")
+            dpi = meta.get("dpi")
+            f.write(f"DPI: {dpi if dpi is not None else 'N/A'}\n")
             f.write("\n")
             f.write(summary_table)
             f.write("\n")
@@ -433,13 +698,34 @@ Examples:
   
   # Custom output directory
   python run_ocr_ablation.py document.pdf -o ./my_results
+
+  # DocTR: write *_output.json only (no combined *.txt):
+  python run_ocr_ablation.py doc.pdf --no-combined-txt -m doctr
+
+  # Markdown-primary models also emit *_output.txt alongside *.md:
+  python run_ocr_ablation.py doc.pdf --also-combined-txt -m docling
+
+  # All images in a folder (default five models unless you pass -m):
+  python run_ocr_ablation.py --images-dir ./test_cases15 -o ./out_images
         """
     )
     
     parser.add_argument(
         "pdf",
         type=Path,
-        help="Path to input PDF file"
+        nargs="?",
+        default=None,
+        help="Path to input PDF (omit when using --images-dir)",
+    )
+
+    parser.add_argument(
+        "--images-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Run on every image in this directory (sorted by name) instead of a PDF. "
+            f"Default models if -m omitted: {', '.join(DEFAULT_IMAGES_DIR_MODELS)}"
+        ),
     )
     
     parser.add_argument(
@@ -471,6 +757,28 @@ Examples:
         default=300,
         help="DPI for PDF rendering (default: 300)"
     )
+
+    parser.add_argument(
+        "--no-native-exports",
+        action="store_true",
+        help="Disable per-model native outputs under OUTPUT/native/<model>/page_XXXX/",
+    )
+
+    parser.add_argument(
+        "--no-combined-txt",
+        action="store_true",
+        help="Do not write *_output.txt for plain-text models (tesseract, DocTR, …).",
+    )
+    parser.add_argument(
+        "--no-combined-md",
+        action="store_true",
+        help="Do not write combined markdown output (.md / .mmd) for Markdown-primary models.",
+    )
+    parser.add_argument(
+        "--also-combined-txt",
+        action="store_true",
+        help="Also write *_output.txt when the model's primary combined file is Markdown.",
+    )
     
     parser.add_argument(
         "--list-models",
@@ -485,6 +793,35 @@ Examples:
         for name, cls in OCR_MODELS.items():
             print(f"  - {name}: {cls.name}")
         sys.exit(0)
+
+    if args.images_dir is not None:
+        if args.pdf is not None:
+            print("Error: provide either a PDF path or --images-dir, not both.")
+            sys.exit(1)
+        if args.pages is not None:
+            print("Error: --pages applies to PDF mode only.")
+            sys.exit(1)
+        if not args.images_dir.is_dir():
+            print(f"Error: not a directory: {args.images_dir}")
+            sys.exit(1)
+        if args.output is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            args.output = Path(f"./ocr_image_results_{timestamp}")
+        models = args.models if args.models is not None else list(DEFAULT_IMAGES_DIR_MODELS)
+        run_ablation_on_images(
+            image_dir=args.images_dir,
+            output_dir=args.output,
+            models=models,
+            native_exports=not args.no_native_exports,
+            write_combined_txt=not args.no_combined_txt,
+            write_combined_md=not args.no_combined_md,
+            also_txt_for_markdown=args.also_combined_txt,
+        )
+        return
+
+    if args.pdf is None:
+        print("Error: provide a PDF path, or use --images-dir for a folder of images.")
+        sys.exit(1)
     
     # Validate PDF path
     if not args.pdf.exists():
@@ -502,7 +839,11 @@ Examples:
         output_dir=args.output,
         models=args.models,
         pages=args.pages,
-        dpi=args.dpi
+        dpi=args.dpi,
+        native_exports=not args.no_native_exports,
+        write_combined_txt=not args.no_combined_txt,
+        write_combined_md=not args.no_combined_md,
+        also_txt_for_markdown=args.also_combined_txt,
     )
 
 

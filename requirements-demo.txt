@@ -1,0 +1,3 @@
+# Optional: Streamlit demo for text eval visualization
+# pip install -r requirements-demo.txt
+streamlit>=1.28.0

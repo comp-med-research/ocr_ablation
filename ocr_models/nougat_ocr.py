@@ -28,6 +28,12 @@ class NougatOCR(BaseOCR):
         """Return whether this model is using GPU acceleration."""
         return self.device == "cuda"
 
+    def is_markdown_primary(self) -> bool:
+        return True
+
+    def combined_markdown_extension(self) -> str:
+        return ".mmd"
+
     def load_model(self) -> None:
         """Load Nougat model."""
         from transformers import NougatProcessor, VisionEncoderDecoderModel
@@ -44,13 +50,13 @@ class NougatOCR(BaseOCR):
         if image.mode != "RGB":
             image = image.convert("RGB")
 
-        # Process image
-        pixel_values = self._processor(
-            images=image,
-            return_tensors="pt"
-        ).pixel_values.to(self.device)
+        # Use ``image_processor`` directly: ``NougatProcessor.__call__`` can pass ``None`` into
+        # strict kwargs (e.g. ``do_crop_margin``) on recent ``transformers`` (5.4+), raising
+        # ``StrictDataclassFieldValidationError``.
+        feats = self._processor.image_processor(image, return_tensors="pt")
+        pixel_values = feats.pixel_values.to(self.device)
 
-        # Generate output
+        # Generate output (``return_dict_in_generate`` → decode ``sequences``, not the full output object)
         with torch.no_grad():
             outputs = self._model.generate(
                 pixel_values,
@@ -60,11 +66,8 @@ class NougatOCR(BaseOCR):
                 return_dict_in_generate=True,
             )
 
-        # Decode
-        sequence = self._processor.batch_decode(
-            outputs,
-            skip_special_tokens=True
-        )[0]
+        ids = outputs.sequences if hasattr(outputs, "sequences") else outputs
+        sequence = self._processor.batch_decode(ids, skip_special_tokens=True)[0]
 
         # Post-process (Nougat uses Markdown-like format)
         sequence = self._processor.post_process_generation(
@@ -72,5 +75,7 @@ class NougatOCR(BaseOCR):
             fix_markdown=True
         )
 
+        # Nougat’s post-processed text is conventionally stored as ``.mmd`` (markdown + math).
+        self.write_native_text(sequence, "nougat.mmd")
         return sequence
 

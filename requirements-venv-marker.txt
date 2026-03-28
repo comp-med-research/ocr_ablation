@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------------------
+# Virtualenv: Marker (marker-pdf) only
+# ---------------------------------------------------------------------------
+#
+# Use this when ``marker-pdf`` breaks or conflicts in your main ``.venv`` (mixed
+# HF / Qwen / Chandra stacks) or when you cannot install Marker next to **MinerU**
+# (MinerU needs Pillow>=11; marker-pdf pins Pillow<11).
+#
+#   cd ocr_ablation
+#   python3 -m venv .venv-marker
+#   source .venv-marker/bin/activate    # Windows: .venv-marker\Scripts\activate
+#   pip install -U pip
+#
+# Install PyTorch **first** for your CUDA/CPU (Marker depends on torch; see):
+#   https://pytorch.org/get-started/locally/
+#
+# Then:
+#   pip install -r requirements-venv-marker.txt
+#
+# Run ablation with Marker only:
+#   python run_ocr_ablation.py --images-dir test_cases15 -o ./out_marker -m marker
+#
+# Use this interpreter explicitly:
+#   .venv-marker/bin/python3 run_ocr_ablation.py ...
+#
+# ---------------------------------------------------------------------------
+
+marker-pdf>=1.0.0
+
+# Ablation runner (no other OCR engines in this file)
+tqdm>=4.66.0
+tabulate>=0.9.0
+pytesseract>=0.3.10
+pdf2image>=1.16.3
+numpy>=1.24.0
+PyMuPDF>=1.23.0

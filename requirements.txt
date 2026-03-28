@@ -1,29 +1,26 @@
-# Core dependencies
-pdf2image>=1.16.3
-Pillow>=10.0.0
-numpy>=1.24.0
-tqdm>=4.66.0
-PyMuPDF>=1.23.0
+# Minimal third-party deps inferred from imports (pipreqs --use-local), plus a few our code
+# needs that pipreqs skips (dynamic imports, subprocess CLIs, ``paddlex[ocr]`` for PP-Structure /
+# PaddleOCR-VL). Recreate the pipreqs slice with:
+#
+#   pipreqs . --use-local --force --print \
+#     --ignore .venv,.venv-deepseek,.venv-ocr-stack,.venv-marker,.git,__pycache__,eval,\
+# out_chandra2,out_docling,out_doctr,out_donut,out_glmocr,out_llama,out_marker,out_mineru,\
+# out_nougat,out_paddle,out_qwen,out_rolmocr,out_tesseract,pagexml,test_cases15,\
+# streamlit_demo
+#
+# (Do not scan ``eval/`` — the local package name is mistaken for PyPI ``eval``.)
+# Optional: RolmOCR GPU fast path → requirements-vllm.txt. Streamlit demo → requirements-demo.txt.
 
-# OCR Engines
-pytesseract>=0.3.10
-paddleocr>=2.7.0
-paddlepaddle>=2.5.0
-python-doctr>=0.7.0
-transformers>=4.35.0
-torch>=2.1.0
-torchvision>=0.16.0
-
-# Nougat for academic documents
-nougat-ocr>=0.1.0
-
-# For RolmOCR and DeepSeek (uses vLLM or transformers)
-vllm>=0.2.0
-
-# Docling, Marker (install for these models)
-docling>=2.50.0
-marker-pdf>=1.0.0
-
-# Utilities
-tabulate>=0.9.0
-
+chandra-ocr==0.2.0
+chandra-ocr[hf]
+docling==2.82.0
+nougat-ocr==0.1.17
+numpy==2.4.3
+pillow==10.4.0
+PyMuPDF==1.27.2.2
+pytesseract==0.3.13
+python-doctr==1.0.1
+tabulate==0.10.0
+torch==2.11.0
+tqdm==4.67.3
+transformers>=4.57.0
