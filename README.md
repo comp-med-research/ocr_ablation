@@ -85,6 +85,40 @@ ocr_results_<timestamp>/
 └── ...
 ```
 
+## Benchmarking methodology (full-page OCR vs ground truth)
+
+This project is set up to benchmark **whole-page** recognition, not crop-based OCR.
+
+- **Inference:** Each model sees the **entire page** (one full rendered PDF page or one LS task image). We **do not** crop Label Studio rectangles and send crops through the models; crops exist only in the **ground truth** for scoring and analysis.
+- **Ground truth:** A Label Studio export encodes **regions** (boxes, transcriptions, labels). Those regions define **evaluation units** (e.g. per-region NED), not model inputs.
+- **Model outputs:** Prefer saving **native** artifacts when a library supports them (Markdown + JSON for layout pipelines, TSV/hOCR/ALTO for Tesseract, DocTR structured `export()`, etc.), in addition to any flat text used for quick comparisons. Formats can differ by model; evaluation code should consume them as needed (tables and reading order later; **text/NED** today via `run_text_eval.py`).
+- **Alignment:** Evaluation takes **one full-page prediction** per task and **matches** it to GT regions with shared normalization and **ordered merging** of prediction paragraphs (OmniDocBench-style fairness for segmentation). See `python run_text_eval.py --help` and reports under `eval_reports/`.
+
+**Label Studio task id vs PDF runs:** `run_ocr_ablation.py` on a multi-page PDF writes one concatenated `{model}_output.txt` for the whole run. For LS you need **one prediction file per page/task** (each file = full-page model output for that image). Use a `--pred-map` JSON (`task_id` → path) or per-task files under `--pred-dir`; that is about **dataset alignment**, not cropping.
+
+## Relation to [OmniDocBench](https://github.com/opendatalab/OmniDocBench)
+
+[OmniDocBench](https://github.com/opendatalab/OmniDocBench) (CVPR 2025) is the public reference for **fair document parsing evaluation**: rich page JSON (`layout_dets`, polys, `ignore`, reading `order`, table HTML/LaTeX, formulas), **end-to-end** scoring on **full-page Markdown** predictions (one `.md` per page, filename aligned to the image), and config-driven runs via `pdf_validation.py`. It implements **normalized edit distance**, **TEDS** (tables), **CDM** (formulas), BLEU/METEOR, layout COCO-style detection, etc., plus matching modes such as `no_split`, `simple_match`, and **`quick_match`** (adjacency merge/split; v1.5 adds **hybrid** text/formula matching).
+
+**How this repo lines up**
+
+| OmniDocBench | Here (`eval/` + `run_text_eval.py`) |
+|--------------|-------------------------------------|
+| GT: `OmniDocBench.json` with categories, `ignore`, reading order | GT: Label Studio export → `gt_manifest.json` (regions + transcriptions) |
+| Pred: directory of **page-level `.md`** files | Pred: **one text/Markdown file per LS task** (full page), same scoring idea |
+| Extraction order (tables, formulas, code, then text) + normalization | Lighter **shared normalization** in `eval/normalize.py` (extensible) |
+| `quick_match` / hybrid matching | **Ordered DP** merging adjacent **prediction paragraphs** to each GT region (NED-focused) |
+| Tables, formulas, reading order in config | **Planned**; text/NED first |
+
+**What is worth reusing from upstream**
+
+- **Methodology:** Their preprocessing and **ignore** logic for headers/footers/captions (see paper/repo) when you add comparable tags in LS.
+- **Metrics:** When you evaluate **tables**, pull in **TEDS** and HTML/LaTeX handling (they use LaTeXML for LaTeX tables; see their README).
+- **Running their benchmark:** Clone the repo, install [`requirements.txt`](https://github.com/opendatalab/OmniDocBench/blob/main/requirements.txt), use their **`configs/`** and **`python pdf_validation.py --config ...`**; optional Docker image `sunyuefeng/omnidocbench-env:v1.5` per their docs.
+- **Aligning with their file layout:** If you standardize outputs as **`<image_stem>.md` per page**, you stay close to their **prediction** convention and can compare notes with leaderboard-style workflows (`tools/generate_result_tables.ipynb`).
+
+We do **not** bundle OmniDocBench; keep it as a **dependency or side-by-side checkout** if you use their dataset or full metric stack. Our code is intentionally smaller and **LS-ground-truth-centric** until you export to their JSON or adopt their pages.
+
 ## Example Results
 
 ```
