@@ -160,6 +160,12 @@ streamlit run streamlit_demo/app.py
 
 Built-in scenarios need no data files; you can also upload a Label Studio export and paste full-page prediction text for one `task_id`.
 
+**Alignment explorer** (markdown vs Docling JSON layout, real `gt_manifest` + pred paths, cost matrix, NED math, bbox figure):
+
+```bash
+streamlit run streamlit_alignment_explorer.py
+```
+
 ## Example Results
 
 ```

@@ -69,6 +69,8 @@ class TaskTextEvalResult:
     pred_segments: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     match_mode: MatchMode = "quick"
+    #: ``text`` (md_segment + match_mode) or ``layout-docling`` (bbox overlap on Docling JSON).
+    alignment: str = "text"
 
 
 def match_gt_to_prediction(
@@ -99,7 +101,12 @@ def match_gt_to_prediction(
     )
     m = len(pred_segments)
 
-    result = TaskTextEvalResult(task_id=None, pred_segments=pred_segments, match_mode=cfg.match_mode)
+    result = TaskTextEvalResult(
+        task_id=None,
+        pred_segments=pred_segments,
+        match_mode=cfg.match_mode,
+        alignment="text",
+    )
 
     if n == 0:
         result.notes.append("no_gt_regions")
