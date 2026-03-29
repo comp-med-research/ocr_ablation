@@ -11,7 +11,8 @@ per-box crops; GT boxes only define **what** to score after alignment.
 2. Split each prediction into segments: by default **markdown-aware** extraction
    (fenced code, HTML/pipe tables, display math, then prose with light MD stripping;
    see ``eval/md_segment.py``). Use ``--legacy-paragraph-segments`` for blank-line-only
-   splits. Then OmniDocBench-style **quick_match** (ported from ``utils/match_quick.py``).
+   splits. Then OmniDocBench-style matching: **quick** (default), **simple** (Hungarian), or
+   **full** (``FuzzyMatch``); see ``--match-mode``.
    Install ``Levenshtein`` for speed (see ``requirements.txt``).
 3. Score **NED** (normalized edit distance) on normalized text; write HTML + JSON
    so you can audit alignments.
@@ -51,13 +52,14 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import cast
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from eval.manifest import build_manifest_from_ls_export, load_manifest, save_manifest
-from eval.matching import TextEvalConfig, match_gt_to_prediction
+from eval.matching import MatchMode, TextEvalConfig, match_gt_to_prediction
 from eval.pred_loader import load_prediction_text
 from eval.visualize import write_eval_report
 
@@ -207,6 +209,16 @@ def main() -> int:
             "If omitted, common keys (text, markdown, content, …) or OCR line lists are tried."
         ),
     )
+    p.add_argument(
+        "--match-mode",
+        type=str,
+        choices=("quick", "simple", "full"),
+        default="quick",
+        help=(
+            "OmniDocBench-style alignment: quick (match_quick), simple (one-to-one Hungarian), "
+            "full (FuzzyMatch substring combine; empty pred segments skipped)"
+        ),
+    )
     args = p.parse_args()
 
     if not args.ls_export and args.manifest is None:
@@ -236,6 +248,7 @@ def main() -> int:
         strip_md_images=not args.no_strip_md_images,
         strip_fences=not args.no_strip_fences,
         use_markdown_structure=not args.legacy_paragraph_segments,
+        match_mode=cast(MatchMode, args.match_mode),
     )
 
     pred_map: dict[str, str] | None = None

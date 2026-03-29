@@ -70,7 +70,8 @@ def render_task_html(
     summary = f"""
     <div class="summary">
       <p><strong>Task</strong> {html.escape(str(task_id))}</p>
-      <p>Regions: {len(eval_result.regions_matched)} · Mean NED: {eval_result.mean_ned:.4f} ·
+      <p>Match mode: <strong>{html.escape(str(eval_result.match_mode))}</strong> ·
+      Regions: {len(eval_result.regions_matched)} · Mean NED: {eval_result.mean_ned:.4f} ·
       Micro NED: {eval_result.micro_ned:.4f} · Mean similarity: {eval_result.mean_similarity:.4f}</p>
       <p>Prediction split into <strong>{len(eval_result.pred_segments)}</strong> paragraph segment(s).</p>
       {('<p class="note">' + html.escape("; ".join(eval_result.notes)) + "</p>") if eval_result.notes else ""}
@@ -149,6 +150,7 @@ def write_eval_report(
     payload: dict[str, Any] = {
         "task_id": task_id,
         "model_name": model_name,
+        "match_mode": eval_result.match_mode,
         "mean_ned": eval_result.mean_ned,
         "micro_ned": eval_result.micro_ned,
         "mean_similarity": eval_result.mean_similarity,

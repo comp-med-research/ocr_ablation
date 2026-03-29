@@ -1,7 +1,7 @@
-"""Fair text transcription evaluation (GT manifest + OmniDocBench-style quick_match + HTML viz)."""
+"""Fair text transcription evaluation (GT manifest + OmniDocBench-style matchers + HTML viz)."""
 
 from .manifest import build_manifest_from_ls_export, save_manifest, load_manifest
-from .matching import match_gt_to_prediction, TextEvalConfig
+from .matching import MatchMode, match_gt_to_prediction, TextEvalConfig
 from .normalize import normalize_text
 
 __all__ = [
@@ -9,6 +9,7 @@ __all__ = [
     "save_manifest",
     "load_manifest",
     "match_gt_to_prediction",
+    "MatchMode",
     "TextEvalConfig",
     "normalize_text",
 ]
