@@ -16,6 +16,8 @@ chandra-ocr[hf]
 docling==2.82.0
 nougat-ocr==0.1.17
 numpy==2.4.3
+scipy>=1.11.0
+Levenshtein>=0.21.0
 pillow==10.4.0
 PyMuPDF==1.27.2.2
 pytesseract==0.3.13

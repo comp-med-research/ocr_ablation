@@ -8,9 +8,11 @@ per-box crops; GT boxes only define **what** to score after alignment.
 
 **Pipeline:**
 1. Build or load a GT manifest (regions with transcriptions from LS).
-2. Match **one full-page prediction** per task to those regions using shared
-   normalization + ordered DP over prediction **paragraphs** (merge adjacent
-   segments so paragraph splits do not unfairly dominate scores).
+2. Split each prediction into segments: by default **markdown-aware** extraction
+   (fenced code, HTML/pipe tables, display math, then prose with light MD stripping;
+   see ``eval/md_segment.py``). Use ``--legacy-paragraph-segments`` for blank-line-only
+   splits. Then OmniDocBench-style **quick_match** (ported from ``utils/match_quick.py``).
+   Install ``Levenshtein`` for speed (see ``requirements.txt``).
 3. Score **NED** (normalized edit distance) on normalized text; write HTML + JSON
    so you can audit alignments.
 
@@ -30,6 +32,9 @@ Examples::
       --pred-map preds.json --out eval_reports
 
 ``preds.json`` maps LS ``task_id`` → path to that task’s **full-page** output.
+Docling natives live under ``results/model_outputs/out_docling/native/docling/page_*/``
+(relative to the pred-map directory, i.e. next to ``ocr_models/``).
+``results/evaluations/eval_reports_*`` are **eval outputs** (HTML/JSON), not model markdown.
 
 Region order for GT (until you add reading-order annotations): default is
 rectangle first-seen in the export; use ``--region-order geometric`` for y-then-x.
@@ -39,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +60,87 @@ from eval.visualize import write_eval_report
 def _load_pred_map(path: Path) -> dict[str, str]:
     m = json.loads(path.read_text(encoding="utf-8"))
     return {str(k): str(v) for k, v in m.items()}
+
+
+# Pred-map paths are usually relative to the package root (same directory as
+# ``ocr_models/``, where ``pred_map_docling.json`` typically lives).
+_DOC_NATIVE_FALLBACKS = (
+    "results/model_outputs/out_docling/native/docling",
+    "results/out_docling/native/docling",
+)
+
+
+def _resolve_prediction_path(
+    raw: str,
+    *,
+    pred_map_path: Path,
+    pred_native_docling: Path | None,
+    pred_filename: str = "docling.md",
+) -> Path:
+    """
+    Resolve a path from ``pred_map``:
+
+    1. As given (absolute), if it exists.
+    2. If relative: ``<pred_map_dir>/<path>``, then ``cwd/<path>``.
+    3. If the map says ``results/out_docling/...`` but only ``model_outputs`` exists,
+       try the same path under ``results/model_outputs/out_docling/…`` (and reverse).
+    4. If still missing, locate ``page_XXXX`` in the string and try each
+       ``_DOC_NATIVE_FALLBACKS`` under pred-map parent and cwd, then
+       ``pred_native_docling`` if set.
+    """
+    raw = (raw or "").strip()
+    norm = raw.replace("\\", "/")
+    p = Path(raw).expanduser()
+    pkg_root = pred_map_path.parent
+
+    def _exists(c: Path) -> bool:
+        return c.is_file()
+
+    if _exists(p):
+        return p
+
+    try_paths: list[Path] = []
+    if not p.is_absolute():
+        try_paths.append(pkg_root / p)
+        try_paths.append(Path.cwd() / p)
+        # Alternate tree: only one of model_outputs vs legacy may exist.
+        rel = Path(p)
+        parts = list(rel.parts)
+        if parts[:2] == ("results", "out_docling"):
+            alt = Path("results") / "model_outputs" / Path(*parts[1:])
+            try_paths.append(pkg_root / alt)
+            try_paths.append(Path.cwd() / alt)
+        if len(parts) >= 3 and parts[:3] == ("results", "model_outputs", "out_docling"):
+            alt2 = Path("results") / Path(*parts[2:])
+            try_paths.append(pkg_root / alt2)
+            try_paths.append(Path.cwd() / alt2)
+    else:
+        try_paths.append(p)
+
+    for c in try_paths:
+        if _exists(c):
+            return c
+
+    m = re.search(r"page_(\d+)", norm, re.I)
+    if m:
+        idx = int(m.group(1))
+        page = f"page_{idx:04d}"
+        fname = Path(norm).name if "/" in norm or "\\" in norm else pred_filename
+        if not fname or fname == norm:
+            fname = pred_filename
+        search_roots: list[Path] = []
+        if pred_native_docling is not None:
+            search_roots.append(pred_native_docling)
+        for sub in _DOC_NATIVE_FALLBACKS:
+            search_roots.append(pkg_root / sub)
+            search_roots.append(Path.cwd() / sub)
+        for root in search_roots:
+            if root.is_dir():
+                cand = root / page / fname
+                if _exists(cand):
+                    return cand
+
+    return try_paths[0] if try_paths else p
 
 
 def _default_pred_path(pred_dir: Path, task_id: int | str, suffix: str) -> Path:
@@ -79,6 +166,14 @@ def main() -> int:
     p.add_argument("--pred-dir", type=Path, help="Directory of per-task prediction .txt files")
     p.add_argument("--pred-suffix", type=str, default="_output.txt", help="Filename = task_id + suffix")
     p.add_argument("--pred-map", type=Path, help="JSON map task_id -> file path")
+    p.add_argument(
+        "--pred-native-docling",
+        type=Path,
+        help=(
+            "Directory containing page_XXXX folders (e.g. results/.../native/docling). "
+            "If a pred-map path is missing, retry page_XXXX/docling.md under here."
+        ),
+    )
     p.add_argument("--task-id", type=str, help="Restrict to one task (required with --pred)")
     p.add_argument("--out", type=Path, default=Path("eval_reports"), help="Output directory")
     p.add_argument("--model-name", type=str, default="", help="Label in HTML/JSON")
@@ -87,6 +182,11 @@ def main() -> int:
     p.add_argument("--lowercase", action="store_true", help="Lowercase before NED (usually off)")
     p.add_argument("--no-strip-md-images", action="store_true")
     p.add_argument("--no-strip-fences", action="store_true")
+    p.add_argument(
+        "--legacy-paragraph-segments",
+        action="store_true",
+        help="Split prediction on blank lines only (ignore markdown structure extraction)",
+    )
     args = p.parse_args()
 
     if not args.ls_export and args.manifest is None:
@@ -115,11 +215,14 @@ def main() -> int:
         lowercase=args.lowercase,
         strip_md_images=not args.no_strip_md_images,
         strip_fences=not args.no_strip_fences,
+        use_markdown_structure=not args.legacy_paragraph_segments,
     )
 
     pred_map: dict[str, str] | None = None
+    pred_map_path: Path | None = None
     if args.pred_map:
-        pred_map = _load_pred_map(args.pred_map)
+        pred_map_path = args.pred_map.resolve()
+        pred_map = _load_pred_map(pred_map_path)
 
     tasks = manifest.get("tasks") or []
     args.out.mkdir(parents=True, exist_ok=True)
@@ -149,6 +252,7 @@ def main() -> int:
         p.error("Provide --pred, or --pred-dir / --pred-map for batch mode")
 
     done = 0
+    skipped_missing = 0
     for task in tasks:
         tid = task.get("task_id")
         if args.task_id and str(tid) != str(args.task_id):
@@ -157,12 +261,26 @@ def main() -> int:
             pth = pred_map.get(str(tid))
             if not pth:
                 continue
-            pred_path = Path(pth)
+            assert pred_map_path is not None
+            pred_path = _resolve_prediction_path(
+                pth,
+                pred_map_path=pred_map_path,
+                pred_native_docling=args.pred_native_docling,
+            )
         else:
             assert args.pred_dir is not None
             pred_path = _default_pred_path(args.pred_dir, tid, args.pred_suffix)
         if not pred_path.is_file():
-            print(f"skip task {tid}: missing {pred_path}", file=sys.stderr)
+            skipped_missing += 1
+            hint = ""
+            if pred_map is not None and args.pred_native_docling is None:
+                hint = (
+                    "  (hint: run Docling → results/model_outputs/out_docling/native/docling/page_*/docling.md "
+                    "or pass --pred-native-docling PATH_TO/native/docling)"
+                )
+            elif pred_map is None:
+                hint = "  (hint: check --pred-dir and --pred-suffix)"
+            print(f"skip task {tid}: missing {pred_path}{hint}", file=sys.stderr)
             continue
         pred_text = pred_path.read_text(encoding="utf-8", errors="replace")
         # Strip common page-break markers from ablation runner
@@ -182,7 +300,17 @@ def main() -> int:
         print(f"task {tid} -> {out_html.name} (mean NED {er.mean_ned:.4f})")
 
     if done == 0:
-        print("No reports written (check task ids and prediction paths).", file=sys.stderr)
+        print(
+            "No reports written (check task ids and prediction paths).",
+            file=sys.stderr,
+        )
+        if skipped_missing and pred_map is not None:
+            print(
+                "Pred-map entries point at files that are not on disk — run the OCR pipeline "
+                "(outputs under results/model_outputs/out_docling/…), fix paths relative to the "
+                "pred-map file (same folder as ocr_models/), or use --pred-native-docling.",
+                file=sys.stderr,
+            )
         return 1
     return 0
 
