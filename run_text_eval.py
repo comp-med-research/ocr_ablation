@@ -36,6 +36,10 @@ Docling natives live under ``results/model_outputs/out_docling/native/docling/pa
 (relative to the pred-map directory, i.e. next to ``ocr_models/``).
 ``results/evaluations/eval_reports_*`` are **eval outputs** (HTML/JSON), not model markdown.
 
+For **JSON** predictions (``*.json``), use ``--pred-format auto`` (default) or ``json``;
+if the text is nested, pass ``--pred-json-key`` (dot path, e.g. ``pages.0.markdown``).
+See ``eval/pred_loader.py`` for auto-detected keys and OCR line-list joining.
+
 Region order for GT (until you add reading-order annotations): default is
 rectangle first-seen in the export; use ``--region-order geometric`` for y-then-x.
 """
@@ -54,6 +58,7 @@ if str(ROOT) not in sys.path:
 
 from eval.manifest import build_manifest_from_ls_export, load_manifest, save_manifest
 from eval.matching import TextEvalConfig, match_gt_to_prediction
+from eval.pred_loader import load_prediction_text
 from eval.visualize import write_eval_report
 
 
@@ -187,6 +192,21 @@ def main() -> int:
         action="store_true",
         help="Split prediction on blank lines only (ignore markdown structure extraction)",
     )
+    p.add_argument(
+        "--pred-format",
+        choices=("auto", "text", "json"),
+        default="auto",
+        help="How to read prediction files: auto (.json → JSON, else text), text (raw bytes), json (parse JSON)",
+    )
+    p.add_argument(
+        "--pred-json-key",
+        type=str,
+        default=None,
+        help=(
+            "Dot path to a string field in JSON predictions, e.g. result.markdown or pages.0.text. "
+            "If omitted, common keys (text, markdown, content, …) or OCR line lists are tried."
+        ),
+    )
     args = p.parse_args()
 
     if not args.ls_export and args.manifest is None:
@@ -230,7 +250,15 @@ def main() -> int:
     if args.pred:
         if not args.task_id:
             p.error("--pred requires --task-id")
-        pred_text = args.pred.read_text(encoding="utf-8", errors="replace")
+        try:
+            pred_text = load_prediction_text(
+                args.pred,
+                pred_format=args.pred_format,
+                json_key=args.pred_json_key,
+            )
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            print(f"Failed to load prediction {args.pred}: {e}", file=sys.stderr)
+            return 1
         task = next((t for t in tasks if str(t.get("task_id")) == str(args.task_id)), None)
         if not task:
             print(f"Task id {args.task_id} not in manifest", file=sys.stderr)
@@ -282,7 +310,15 @@ def main() -> int:
                 hint = "  (hint: check --pred-dir and --pred-suffix)"
             print(f"skip task {tid}: missing {pred_path}{hint}", file=sys.stderr)
             continue
-        pred_text = pred_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            pred_text = load_prediction_text(
+                pred_path,
+                pred_format=args.pred_format,
+                json_key=args.pred_json_key,
+            )
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            print(f"skip task {tid}: could not read {pred_path}: {e}", file=sys.stderr)
+            continue
         # Strip common page-break markers from ablation runner
         pred_text = pred_text.replace("\n\n--- Page Break ---\n\n", "\n\n")
         er = match_gt_to_prediction(task["regions"], pred_text, config=cfg)
