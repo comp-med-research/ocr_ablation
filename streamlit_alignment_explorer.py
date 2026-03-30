@@ -8,7 +8,13 @@ Run from repo root::
     pip install -r requirements-demo.txt
     streamlit run streamlit_alignment_explorer.py
 
-Defaults use ``gt_manifest.json`` and Docling paths from ``pred_map_docling*.json``.
+If you see **inotify watch limit reached**, either run from this directory (uses
+``.streamlit/config.toml`` with ``fileWatcherType = "none"``) or::
+
+    STREAMLIT_SERVER_FILE_WATCHER_TYPE=none streamlit run streamlit_alignment_explorer.py
+
+Defaults use ``gt_manifest.json``, Docling paths from ``pred_map_docling*.json``, and page
+rasters from ``test_cases15`` (Label Studio ``uuid-NNNNN.jpg`` → ``NNNNN.jpg``).
 """
 
 from __future__ import annotations
@@ -61,6 +67,34 @@ def _resolve(p: str, base: Path) -> Path:
     return c
 
 
+def _resolve_manifest_page_image(manifest_image: str, base: Path, images_dir: Path | None) -> Path | None:
+    """
+    Map Label Studio ``data.image`` (e.g. ``/data/upload/12/be33ebd5-00000725.jpg``) to a local file.
+
+    Tries: absolute path, ``base``-relative, cwd, then ``images_dir / basename`` and
+    ``images_dir / <after first '-' in basename>`` (e.g. ``00000725.jpg`` in ``test_cases15``).
+    """
+    p = str(manifest_image).strip()
+    if not p:
+        return None
+    trials: list[Path] = []
+    q = Path(p).expanduser()
+    trials.append(q)
+    trials.append(base / p.lstrip("/"))
+    trials.append(Path.cwd() / p)
+    if images_dir is not None:
+        idir = images_dir.expanduser()
+        if idir.is_dir():
+            name = Path(p).name
+            trials.append(idir / name)
+            if "-" in name:
+                trials.append(idir / name.split("-", 1)[1])
+    for t in trials:
+        if t.is_file():
+            return t
+    return None
+
+
 def _ned_breakdown(gt_norm: str, pred_norm: str) -> tuple[int, int, float]:
     d = levenshtein_distance(gt_norm, pred_norm)
     denom = max(len(gt_norm), len(pred_norm), 1)
@@ -86,19 +120,55 @@ def _diff_html(a: str, b: str) -> str:
     return "".join(parts)
 
 
+def _load_page_image_array(path: Path) -> np.ndarray | None:
+    """RGB uint8 array (H, W, 3), or None if missing/unreadable."""
+    if not path.is_file():
+        return None
+    try:
+        from PIL import Image
+
+        im = Image.open(path).convert("RGB")
+        return np.asarray(im)
+    except Exception:
+        try:
+            arr = plt.imread(str(path))
+            if arr.ndim == 2:
+                arr = np.stack([arr, arr, arr], axis=-1)
+            if arr.shape[-1] == 4:
+                arr = arr[..., :3]
+            return (np.clip(arr, 0, 1) * 255).astype(np.uint8) if arr.dtype == np.floating else arr.astype(np.uint8)
+        except Exception:
+            return None
+
+
 def _fig_boxes_norm(
     gt_boxes: list[tuple[BoxNorm, str, int]],
     pred_boxes: list[tuple[BoxNorm, str, int]],
     highlight_gt: int | None,
     matched_pred_idx: set[int],
+    *,
+    background_image_path: Path | None = None,
 ) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(8, 10))
+    img = _load_page_image_array(background_image_path) if background_image_path else None
+    if img is not None:
+        ih, iw = int(img.shape[0]), int(img.shape[1])
+        fig_w, fig_h = 8.0, max(3.0, 8.0 * ih / max(iw, 1))
+    else:
+        fig_w, fig_h = 8.0, 10.0
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.set_xlim(0, 1)
     ax.set_ylim(1, 0)
-    ax.set_aspect("equal")
+    if img is not None:
+        ax.imshow(img, extent=(0, 1, 1, 0), origin="upper", zorder=0)
+        ax.set_aspect(iw / max(ih, 1))
+    else:
+        ax.set_aspect("equal")
     ax.set_xlabel("x (normalized)")
     ax.set_ylabel("y (normalized, top=0)")
-    ax.set_title("Boxes: green = GT regions, blue = Docling spans (bold = matched to selected GT)")
+    title = "Boxes: green = GT regions, blue = Docling spans (bold = matched to selected GT)"
+    if img is not None:
+        title = "Page image + " + title
+    ax.set_title(title)
     for box, _label, idx in gt_boxes:
         ec = "#228B22" if highlight_gt is None or idx == highlight_gt else "#90EE90"
         lw = 2.5 if highlight_gt is not None and idx == highlight_gt else 1.0
@@ -111,6 +181,7 @@ def _fig_boxes_norm(
                 fill=False,
                 edgecolor=ec,
                 linewidth=lw,
+                zorder=2,
             )
         )
     for box, _t, idx in pred_boxes:
@@ -126,6 +197,7 @@ def _fig_boxes_norm(
                 edgecolor=ec,
                 linewidth=lw,
                 linestyle="-" if idx in matched_pred_idx else ":",
+                zorder=2,
             )
         )
     ax.legend(
@@ -147,13 +219,20 @@ def main() -> None:
         "**text** path (md segments + quick_match) and **layout** path (bbox overlap + NED)."
     )
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         manifest_path = st.text_input("Manifest path", value=str(ROOT / "gt_manifest.json"))
     with col2:
         base_dir = st.text_input("Resolve relative paths from", value=str(ROOT))
+    with col3:
+        page_images_dir_in = st.text_input(
+            "Page images directory",
+            value=str(ROOT / "test_cases15"),
+            help="Manifest paths like …/uuid-00000725.jpg are matched to 00000725.jpg here.",
+        )
 
     base = Path(base_dir)
+    page_images_dir = Path(page_images_dir_in).expanduser() if page_images_dir_in.strip() else None
     mp = Path(manifest_path)
     if not mp.is_file():
         st.error(f"Manifest not found: {mp}")
@@ -206,7 +285,7 @@ def main() -> None:
                 "chars": [len(s) for s in segs],
                 "preview": [s[:120].replace("\n", " ↵ ") + ("…" if len(s) > 120 else "") for s in segs],
             }
-            st.dataframe(df_seg, use_container_width=True, height=min(400, 40 + 28 * len(segs)))
+            st.dataframe(df_seg, width="stretch", height=min(400, 40 + 28 * len(segs)))
 
             st.markdown("### Step C — Ground-truth regions (from manifest)")
             st.dataframe(
@@ -215,19 +294,26 @@ def main() -> None:
                     "region_id": [str(r.get("region_id", "")) for r in regions],
                     "transcription_gt": gts_raw,
                 },
-                use_container_width=True,
+                width="stretch",
                 height=min(400, 40 + 28 * len(regions)),
             )
 
-            st.markdown("### Step D — `quick_match_gt_pred_lines` (NED cost matrix → merge + Hungarian + fuzzy)")
+            st.markdown("### Step D — Match each GT region to prediction segments (`quick_match`)")
+            st.markdown(
+                """
+**What this step is for.** You have one ordered list of **GT regions** (Step C) and one ordered list of **markdown segments** (Step B). They are usually *not* aligned one-to-one: one region might need several segments concatenated, or boundaries differ. Step D runs the **OmniDocBench-style quick matcher** (`eval/quick_match.py`) to decide, for *each* GT row, *which* segment indices to use and how to **merge** their text before scoring.
+
+**The heatmap below (when shown)** is the **raw** pairwise **NED** grid: cell *(i, j)* = normalized edit distance between normalized GT *i* and normalized segment *j*. With ``viridis_r`` (0 = best match), **lighter / yellow** ≈ **NED near 0** (more similar); **darker / purple** ≈ **NED near 1** (less similar). This matrix is only the *ingredient* cost data — the matcher then applies **global assignment** (Hungarian / `linear_sum_assignment` on a **transformed** matrix that allows merging or splitting prediction lines), **fuzzy** handling for leftovers, and **merging** of adjacent segments when that improves the match. Details: `run_quick_match_no_ignore` → `cal_final_match`, `process_matches`, `fuzzy_match_unmatched_items`, etc.
+
+**Step E** shows the **outcome**: for every GT index, the chosen **segment index range** `[start:end)`, the **merged raw prediction** string, and **NED** between that GT and the merged pred.
+                """.strip()
+            )
             gts_norm = [cfg.normalize(t) for t in gts_raw]
             preds_norm = [cfg.normalize(t) for t in segs]
             if len(segs) and len(regions):
                 cm = compute_edit_distance_matrix_new(gts_norm, preds_norm)
                 st.caption(
-                    "Cost matrix **C[i,j]** = Levenshtein(norm_gt_i, norm_seg_j) / max(len). "
-                    "Quick_match then merges/splits preds and runs Hungarian on a **transformed** matrix "
-                    "(see `eval/quick_match.py`); this heatmap is the **raw** NED grid."
+                    "Heatmap: **C[i,j]** = NED(norm_gt_i, norm_seg_j). The table in Step E comes from **`quick_match_gt_pred_lines`**, not from taking argmin per row of this grid."
                 )
                 fig_cm, ax_cm = plt.subplots(figsize=(max(6, len(segs) * 0.35), max(4, len(regions) * 0.35)))
                 im = ax_cm.imshow(cm, cmap="viridis_r", aspect="auto", vmin=0, vmax=1)
@@ -246,7 +332,7 @@ def main() -> None:
             for n in qnotes:
                 st.info(n)
             assign = {int(r["gt_index"]): r for r in rows}
-            st.markdown("### Step E — Assignment → merged pred per GT")
+            st.markdown("### Step E — Result of quick_match: merged pred per GT region")
             st.dataframe(
                 {
                     "gt_index": [assign[i]["gt_index"] for i in sorted(assign.keys())],
@@ -257,7 +343,7 @@ def main() -> None:
                     "pred_raw_merged": [assign[i]["pred_raw"][:200] for i in sorted(assign.keys())],
                     "NED": [round(float(assign[i]["ned"]), 4) for i in sorted(assign.keys())],
                 },
-                use_container_width=True,
+                width="stretch",
                 height=min(500, 40 + 28 * len(assign)),
             )
 
@@ -289,6 +375,14 @@ def main() -> None:
 
     # ----- Layout tab -----
     with tab_lo:
+        task_data = task.get("data") or {}
+        img_key = task_data.get("image")
+        page_img_path = (
+            _resolve_manifest_page_image(str(img_key), base, page_images_dir)
+            if img_key
+            else None
+        )
+
         st.markdown("### Step A — Load Docling JSON → text spans + boxes")
         if not js_path.is_file():
             st.warning(f"Missing file: {js_path}")
@@ -329,9 +423,26 @@ def main() -> None:
                         "y1": round(sp.box.y1, 4),
                     }
                 )
-            st.dataframe(span_rows, use_container_width=True, height=min(400, 40 + 24 * len(span_rows)))
+            st.dataframe(span_rows, width="stretch", height=min(400, 40 + 24 * len(span_rows)))
 
             st.markdown("### Step B — GT boxes (manifest `bbox_pct` → normalized top-left)")
+            if img_key:
+                if page_img_path is not None and page_img_path.is_file():
+                    st.caption(
+                        f"Box overlay (Step C) draws on the manifest page image: `{page_img_path}` "
+                        "(same coordinate space as `bbox_pct`)."
+                    )
+                else:
+                    st.caption(
+                        f"Manifest has `data.image` = `{img_key}` but no matching file was found "
+                        f"(check **Page images directory**: `{page_images_dir or '—'}`; "
+                        f"also tries basename and the part after the first `-` in the filename). "
+                        "GT/Docling rectangles still plot on a blank canvas."
+                    )
+            else:
+                st.caption(
+                    "No `data.image` on this task — GT vs Docling boxes are drawn on a blank normalized square."
+                )
             gt_boxes: list[tuple[BoxNorm, str, int]] = []
             for i, r in enumerate(regions):
                 bp = r.get("bbox_pct")
@@ -370,7 +481,7 @@ def main() -> None:
                     )
                 st.dataframe(
                     [x for x in overlap_rows if x["assigned"]],
-                    use_container_width=True,
+                    width="stretch",
                     height=min(300, 40 + 24 * len(matched)),
                 )
 
@@ -388,7 +499,13 @@ def main() -> None:
                 )
 
                 pred_box_list = [(sp.box, sp.text, j) for j, sp in enumerate(spans)]
-                fig = _fig_boxes_norm(gt_boxes, pred_box_list, highlight_gt=ri2, matched_pred_idx=matched)
+                fig = _fig_boxes_norm(
+                    gt_boxes,
+                    pred_box_list,
+                    highlight_gt=ri2,
+                    matched_pred_idx=matched,
+                    background_image_path=page_img_path if img_key else None,
+                )
                 st.pyplot(fig)
                 plt.close(fig)
 

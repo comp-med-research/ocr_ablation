@@ -2,3 +2,4 @@
 # pip install -r requirements-demo.txt
 streamlit>=1.28.0
 matplotlib>=3.7.0
+Pillow>=10.0.0

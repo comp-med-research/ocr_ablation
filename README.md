@@ -163,8 +163,13 @@ Built-in scenarios need no data files; you can also upload a Label Studio export
 **Alignment explorer** (markdown vs Docling JSON layout, real `gt_manifest` + pred paths, cost matrix, NED math, bbox figure):
 
 ```bash
+cd ocr_ablation
 streamlit run streamlit_alignment_explorer.py
 ```
+
+The **Page images directory** field defaults to ``test_cases15``; manifest paths like ``…/uuid-00000725.jpg`` are resolved to ``test_cases15/00000725.jpg``.
+
+If Linux logs **inotify watch limit reached**, the repo includes ``.streamlit/config.toml`` that disables the file watcher (refresh the browser after edits), or run: ``STREAMLIT_SERVER_FILE_WATCHER_TYPE=none streamlit run …``. Optionally raise system limits: ``sudo sysctl fs.inotify.max_user_watches=524288``.
 
 ## Example Results
 

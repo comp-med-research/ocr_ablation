@@ -1,0 +1,4 @@
+# Avoid Linux "inotify watch limit reached" when the repo is large (many subdirs).
+# Tradeoff: editing this app may not auto-reload until you refresh the browser.
+[server]
+fileWatcherType = "none"
