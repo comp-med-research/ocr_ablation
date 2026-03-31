@@ -37,12 +37,12 @@ import streamlit as st
 from eval.docling_layout import (
     iter_docling_text_spans,
     load_docling_json,
-    match_gt_to_docling_json_path,
+    match_gt_to_docling_layout,
     pick_docling_document,
     resolve_docling_list_index,
 )
 from eval.edit_distance import levenshtein_distance, normalized_edit_distance
-from eval.layout_geometry import BoxNorm, box_from_bbox_pct, iou
+from eval.layout_geometry import BoxNorm, box_from_bbox_pct, iou, reading_order_sort_key
 from eval.manifest import load_manifest
 from eval.matching import MatchMode, TextEvalConfig, match_gt_to_prediction
 from eval.md_segment import prediction_segments
@@ -167,6 +167,7 @@ def _fig_boxes_norm(
     matched_pred_idx: set[int],
     *,
     background_image_path: Path | None = None,
+    show_gt_index_labels: bool = False,
 ) -> plt.Figure:
     img = _load_page_image_array(background_image_path) if background_image_path else None
     if img is not None:
@@ -203,6 +204,20 @@ def _fig_boxes_norm(
                 zorder=2,
             )
         )
+        if show_gt_index_labels:
+            ty = max(box.y0 - 0.005, 0.003)
+            ax.text(
+                box.x0,
+                ty,
+                str(idx),
+                fontsize=7,
+                color=ec,
+                va="bottom",
+                ha="left",
+                zorder=4,
+                fontfamily="monospace",
+                bbox={"boxstyle": "round,pad=0.12", "facecolor": "black", "edgecolor": "none", "alpha": 0.5},
+            )
     for box, _t, idx in pred_boxes:
         ec = "#1E90FF" if idx in matched_pred_idx else "#87CEEB"
         lw = 2.0 if idx in matched_pred_idx else 0.8
@@ -354,9 +369,10 @@ def main() -> None:
 
             match_mode_md = st.radio(
                 "Text match mode",
-                options=["quick", "simple", "full"],
+                options=["simple", "quick", "full"],
+                index=1,
                 horizontal=True,
-                help="quick = OmniDocBench match_quick; simple = one-to-one Hungarian on NED; full = FuzzyMatch / match_full.",
+                help="simple = one-to-one Hungarian on NED; quick = OmniDocBench match_quick; full = FuzzyMatch / match_full.",
             )
             cfg_md = TextEvalConfig(match_mode=cast(MatchMode, match_mode_md))
 
@@ -409,7 +425,7 @@ def main() -> None:
             st.markdown(f"### Step D — Match each GT region to prediction segments (`{match_mode_md}`)")
             st.markdown(
                 """
-**Simple vs quick vs full (short overview).** **Simple** — at most **one** pred segment per GT and vice versa; **Hungarian** on the raw NED matrix; leftover segments go unused. **Quick** — OmniDocBench **match_quick**: uses that cost data but runs **global assignment on a transformed matrix**, then merge/split / **fuzzy** steps so one GT can span **several** segments. **Full** — OmniDocBench **match_full** / **FuzzyMatch**: substring-style **combine**; **empty** segments are dropped before matching. None is the single “true” alignment; **NED reflects whichever pairing** each mode produces, so one mode can score better on some pages than another.
+**Simple, quick, and full (short overview).** **Simple** — at most **one** pred segment per GT and vice versa; **Hungarian** on the raw NED matrix; leftover segments go unused. **Quick** — OmniDocBench **match_quick**: uses that cost data but runs **global assignment on a transformed matrix**, then merge/split / **fuzzy** steps so one GT can span **several** segments. **Full** — OmniDocBench **match_full** / **FuzzyMatch**: substring-style **combine**; **empty** segments are dropped before matching. None is the single “true” alignment; **NED reflects whichever pairing** each mode produces, so one mode can score better on some pages than another.
                 """.strip()
             )
             if match_mode_md == "quick":
@@ -545,10 +561,12 @@ def main() -> None:
             page_no = st.number_input("Docling page_no", min_value=1, value=1, step=1)
             min_iou = st.slider("layout min IoU", 0.0, 0.5, 0.05, 0.01)
 
+            layout_pick_notes: list[str] = []
             if isinstance(data, list):
                 li, res_notes = resolve_docling_list_index(js_path, doc_index=None, inner_id=inner_id)
                 doc, pick_extra = pick_docling_document(data, list_index=li)
-                for x in res_notes + pick_extra:
+                layout_pick_notes = [*res_notes, *pick_extra]
+                for x in layout_pick_notes:
                     st.caption(x)
             else:
                 doc = data
@@ -578,6 +596,19 @@ def main() -> None:
                     }
                 )
             st.dataframe(span_rows, width="stretch", height=min(400, 40 + 24 * len(span_rows)))
+
+            er_lo = None
+            try:
+                er_lo = match_gt_to_docling_layout(
+                    regions,
+                    doc,
+                    config=cfg,
+                    page_no=int(page_no),
+                    min_iou=float(min_iou),
+                    doc_pick_notes=layout_pick_notes,
+                )
+            except Exception as e:
+                st.error(f"Layout alignment failed: {e}")
 
             st.markdown("### Step B — GT boxes (manifest `bbox_pct` → normalized top-left)")
             if img_key:
@@ -640,18 +671,34 @@ def main() -> None:
                 )
 
                 idxs = [j for j, x in enumerate(overlap_rows) if x["assigned"]]
-                idxs.sort(key=lambda k: (spans[k].box.y0, spans[k].box.x0))
+                idxs.sort(key=lambda k: reading_order_sort_key(spans[k].box))
                 merged = " ".join(spans[k].text for k in idxs)
                 gt_raw = gts_raw[ri2] if ri2 < len(gts_raw) else ""
                 gn = cfg.normalize(gt_raw)
                 pn = cfg.normalize(merged)
                 d, denom, ned = _ned_breakdown(gn, pn)
-                st.markdown("**Merged pred (reading order)**")
-                st.code(merged or "∅")
                 st.latex(
-                    rf"\mathrm{{NED}}=\frac{{{d}}}{{{denom}}}={ned:.4f}"
+                    r"\mathrm{NED} = \frac{d_{\mathrm{Lev}}(\mathrm{gt}, \mathrm{pred})}{\max(|\mathrm{gt}|, |\mathrm{pred}|, 1)}"
+                    + rf" = \frac{{{d}}}{{{denom}}} = {ned:.4f}"
+                )
+                c_lo_g, c_lo_p = st.columns(2)
+                with c_lo_g:
+                    st.markdown("**GT (normalized)**")
+                    st.code(gn or "∅")
+                with c_lo_p:
+                    st.markdown("**Merged pred (reading order, normalized)**")
+                    st.code(pn or "∅")
+                st.markdown("**Character diff** (green=match, red=del, blue=ins)")
+                st.markdown(
+                    f'<div style="font-family:ui-monospace,monospace;font-size:14px;line-height:1.6">{_diff_html(gn, pn)}</div>',
+                    unsafe_allow_html=True,
                 )
 
+                show_lo_gt_nums = st.checkbox(
+                    "Show gt_index labels on GT boxes (page image)",
+                    value=False,
+                    key="lo_gt_index_labels",
+                )
                 pred_box_list = [(sp.box, sp.text, j) for j, sp in enumerate(spans)]
                 fig = _fig_boxes_norm(
                     gt_boxes,
@@ -659,27 +706,50 @@ def main() -> None:
                     highlight_gt=ri2,
                     matched_pred_idx=matched,
                     background_image_path=page_img_path if img_key else None,
+                    show_gt_index_labels=show_lo_gt_nums,
                 )
                 st.pyplot(fig)
                 plt.close(fig)
 
-            st.markdown("### Step D — Full layout metrics (`match_gt_to_docling_json_path`)")
-            try:
-                er_lo = match_gt_to_docling_json_path(
-                    regions,
-                    js_path,
-                    config=cfg,
-                    page_no=int(page_no),
-                    doc_index=None,
-                    inner_id=inner_id,
-                    min_iou=float(min_iou),
+            st.markdown("### Step D — Layout match: pred per GT region (like markdown Step E)")
+            st.caption(
+                "**pred_segment_range** ``[start:end)`` indexes Docling span **j** from Step A; merged text uses reading order "
+                "(IoU/center overlap + left-to-right within a line)."
+            )
+            if er_lo is not None:
+                rm = er_lo.regions_matched
+                st.dataframe(
+                    {
+                        "gt_index": [m.gt_index for m in rm],
+                        "pred_segment_range": [
+                            f"[{m.pred_segment_start}:{m.pred_segment_end})" for m in rm
+                        ],
+                        "gt_transcription": [
+                            (
+                                (gts_raw[m.gt_index][:200] + ("…" if len(gts_raw[m.gt_index]) > 200 else ""))
+                                if 0 <= m.gt_index < len(gts_raw)
+                                else ""
+                            )
+                            for m in rm
+                        ],
+                        "pred_raw_merged": [
+                            (m.pred_raw_merged[:200] + ("…" if len(m.pred_raw_merged) > 200 else ""))
+                            for m in rm
+                        ],
+                        "NED": [round(float(m.ned), 4) for m in rm],
+                    },
+                    width="stretch",
+                    height=min(500, 40 + 28 * len(rm)),
                 )
+            else:
+                st.caption("Table unavailable — fix the error above.")
+
+            st.markdown("### Step E — Aggregate layout metrics (`match_gt_to_docling_layout`)")
+            if er_lo is not None:
                 st.metric("Mean NED (layout pipeline)", f"{er_lo.mean_ned:.4f}")
                 st.metric("Micro NED", f"{er_lo.micro_ned:.4f}")
                 for n in er_lo.notes:
                     st.caption(n)
-            except Exception as e:
-                st.error(str(e))
 
 
 if __name__ == "__main__":

@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from .edit_distance import normalized_edit_distance
-from .layout_geometry import BoxNorm, box_from_bbox_pct, docling_bbox_to_box_norm, iou
+from .layout_geometry import (
+    BoxNorm,
+    box_from_bbox_pct,
+    docling_bbox_to_box_norm,
+    iou,
+    reading_order_sort_key,
+)
 from .matching import RegionMatch, TaskTextEvalResult, TextEvalConfig, _aggregate_metrics
 
 
@@ -158,7 +164,7 @@ def _indices_overlapping_gt(
             cx, cy = sp.box.center()
             if gt.x0 <= cx <= gt.x1 and gt.y0 <= cy <= gt.y1:
                 idxs.append(j)
-    idxs.sort(key=lambda k: (spans[k].box.y0, spans[k].box.x0))
+    idxs.sort(key=lambda k: reading_order_sort_key(spans[k].box))
     return idxs
 
 

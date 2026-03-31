@@ -96,3 +96,16 @@ def docling_bbox_to_box_norm(
         y0 = min(y0_tl, y1_tl)
         y1 = max(y0_tl, y1_tl)
     return BoxNorm(x0, y0, x1, y1)
+
+
+def reading_order_sort_key(box: BoxNorm) -> tuple[float, float]:
+    """
+    Sort key: top-to-bottom, then **left-to-right** on the same line.
+
+    Uses the vertical **center** rounded to one decimal (normalized coords) as a row bucket so
+    small y jitter between spans on one line does not dominate over ``x0``.
+    Pure ``(y0, x0)`` ordering can place a left fragment after a right fragment when ``y0`` differs slightly.
+    """
+    y_mid = (box.y0 + box.y1) / 2.0
+    row = round(y_mid, 1)
+    return (row, box.x0)
