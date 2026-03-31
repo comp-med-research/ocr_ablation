@@ -169,6 +169,8 @@ streamlit run streamlit_alignment_explorer.py
 
 The **Page images directory** field defaults to ``test_cases15``; manifest paths like ``…/uuid-00000725.jpg`` are resolved to ``test_cases15/00000725.jpg``.
 
+**Text match modes** (markdown tab, Step D): **simple** — one-to-one Hungarian on NED, unmatched segments ignored. **quick** — OmniDocBench ``match_quick`` (transformed cost matrix + merge/split + fuzzy; multiple segments per GT possible). **full** — OmniDocBench ``match_full`` / FuzzyMatch (substring combine; empty segments dropped). They can yield different NEDs per task because NED depends on the induced alignment, not because one mode is always “more accurate.”
+
 If Linux logs **inotify watch limit reached**, the repo includes ``.streamlit/config.toml`` that disables the file watcher (refresh the browser after edits), or run: ``STREAMLIT_SERVER_FILE_WATCHER_TYPE=none streamlit run …``. Optionally raise system limits: ``sudo sysctl fs.inotify.max_user_watches=524288``.
 
 ## Example Results

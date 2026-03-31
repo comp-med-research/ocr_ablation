@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Step-by-step alignment explorer: markdown (text+quick_match) vs Docling JSON (layout).
+Step-by-step alignment explorer: markdown (text: quick / simple / full match) vs Docling JSON (layout).
 
 Run from repo root::
 
@@ -23,6 +23,7 @@ import json
 import sys
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import cast
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -43,9 +44,11 @@ from eval.docling_layout import (
 from eval.edit_distance import levenshtein_distance, normalized_edit_distance
 from eval.layout_geometry import BoxNorm, box_from_bbox_pct, iou
 from eval.manifest import load_manifest
-from eval.matching import TextEvalConfig, match_gt_to_prediction
+from eval.matching import MatchMode, TextEvalConfig, match_gt_to_prediction
 from eval.md_segment import prediction_segments
+from eval.full_match import full_match_gt_pred_lines
 from eval.quick_match import compute_edit_distance_matrix_new, quick_match_gt_pred_lines
+from eval.simple_match import simple_match_gt_pred_lines
 
 
 def _load_json_map(path: Path) -> dict[str, str]:
@@ -118,6 +121,22 @@ def _diff_html(a: str, b: str) -> str:
             parts.append(f'<span style="background:#ffd6d6;text-decoration:line-through">{sa}</span>')
             parts.append(f'<span style="background:#d6e8ff">{sb}</span>')
     return "".join(parts)
+
+
+def _gt_region_crop_rgb(page_rgb: np.ndarray, region: dict) -> np.ndarray | None:
+    """Crop manifest ``bbox_pct`` region from RGB uint8 array (H, W, 3); top-left percent origin."""
+    bp = region.get("bbox_pct")
+    b = box_from_bbox_pct(bp) if isinstance(bp, dict) else None
+    if b is None:
+        return None
+    h, w = int(page_rgb.shape[0]), int(page_rgb.shape[1])
+    x0 = int(np.clip(np.floor(b.x0 * w), 0, w - 1))
+    x1 = int(np.clip(np.ceil(b.x1 * w), 0, w))
+    y0 = int(np.clip(np.floor(b.y0 * h), 0, h - 1))
+    y1 = int(np.clip(np.ceil(b.y1 * h), 0, h))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return np.asarray(page_rgb[y0:y1, x0:x1])
 
 
 def _load_page_image_array(path: Path) -> np.ndarray | None:
@@ -211,12 +230,62 @@ def _fig_boxes_norm(
     return fig
 
 
+def _fig_gt_overlay_on_page(
+    page_rgb: np.ndarray,
+    regions: list[dict],
+    *,
+    edgecolor: str = "#00e676",
+    fontsize: float = 7.0,
+) -> plt.Figure:
+    """Full page with manifest ``bbox_pct`` rectangles and ``gt_index`` labels (normalized coords)."""
+    ih, iw = int(page_rgb.shape[0]), int(page_rgb.shape[1])
+    fig_w, fig_h = 9.0, max(3.0, 9.0 * ih / max(iw, 1))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(1, 0)
+    ax.imshow(page_rgb, extent=(0, 1, 1, 0), origin="upper", zorder=0)
+    ax.set_aspect(iw / max(ih, 1))
+    ax.axis("off")
+    for i, r in enumerate(regions):
+        bp = r.get("bbox_pct")
+        b = box_from_bbox_pct(bp) if isinstance(bp, dict) else None
+        if b is None:
+            continue
+        rw, rh = b.x1 - b.x0, b.y1 - b.y0
+        ax.add_patch(
+            mpatches.Rectangle(
+                (b.x0, b.y0),
+                rw,
+                rh,
+                fill=False,
+                edgecolor=edgecolor,
+                linewidth=1.6,
+                zorder=2,
+            )
+        )
+        ty = max(b.y0 - 0.005, 0.003)
+        ax.text(
+            b.x0,
+            ty,
+            str(i),
+            fontsize=fontsize,
+            color=edgecolor,
+            va="bottom",
+            ha="left",
+            zorder=3,
+            fontfamily="monospace",
+            bbox={"boxstyle": "round,pad=0.12", "facecolor": "black", "edgecolor": "none", "alpha": 0.5},
+        )
+    fig.tight_layout(pad=0.02)
+    return fig
+
+
 def main() -> None:
     st.set_page_config(page_title="Alignment explorer", layout="wide")
     st.title("Alignment explorer — markdown vs Docling layout")
     st.caption(
         "Walks through real **gt_manifest.json** regions vs predictions: "
-        "**text** path (md segments + quick_match) and **layout** path (bbox overlap + NED)."
+        "**text** path (md segments + quick/simple/full match) and **layout** path (bbox overlap + NED)."
     )
 
     col1, col2, col3 = st.columns(3)
@@ -261,6 +330,12 @@ def main() -> None:
     md_path = _resolve(md_path_in, base)
     js_path = _resolve(json_path_in, base)
 
+    task_data = task.get("data") or {}
+    img_key = task_data.get("image")
+    page_img_path = (
+        _resolve_manifest_page_image(str(img_key), base, page_images_dir) if img_key else None
+    )
+
     cfg = TextEvalConfig()
     inner_id = int(task.get("inner_id") or 1)
 
@@ -277,8 +352,16 @@ def main() -> None:
             with st.expander("Raw file preview (first 4000 chars)"):
                 st.code(pred_text[:4000], language="markdown")
 
+            match_mode_md = st.radio(
+                "Text match mode",
+                options=["quick", "simple", "full"],
+                horizontal=True,
+                help="quick = OmniDocBench match_quick; simple = one-to-one Hungarian on NED; full = FuzzyMatch / match_full.",
+            )
+            cfg_md = TextEvalConfig(match_mode=cast(MatchMode, match_mode_md))
+
             st.markdown("### Step B — Split into segments (`md_segment.prediction_segments`)")
-            segs = prediction_segments(pred_text, use_markdown_structure=cfg.use_markdown_structure)
+            segs = prediction_segments(pred_text, use_markdown_structure=cfg_md.use_markdown_structure)
             st.metric("Segment count", len(segs))
             df_seg = {
                 "idx": list(range(len(segs))),
@@ -298,23 +381,74 @@ def main() -> None:
                 height=min(400, 40 + 28 * len(regions)),
             )
 
-            st.markdown("### Step D — Match each GT region to prediction segments (`quick_match`)")
+            st.markdown("### Page image (manifest `data.image`)")
+            if page_img_path is not None and page_img_path.is_file():
+                show_gt_overlay = st.checkbox(
+                    "Show GT bounding boxes + gt_index (small labels)",
+                    value=False,
+                    key="md_page_gt_overlay",
+                )
+                page_rgb_ov = _load_page_image_array(page_img_path)
+                if show_gt_overlay and page_rgb_ov is not None:
+                    fig_ov = _fig_gt_overlay_on_page(page_rgb_ov, regions)
+                    st.pyplot(fig_ov)
+                    plt.close(fig_ov)
+                    st.caption(
+                        f"Resolved: `{page_img_path}` — boxes from manifest `bbox_pct`; labels are **gt_index** (Step C)."
+                    )
+                else:
+                    st.image(str(page_img_path), caption=f"Resolved: `{page_img_path}` (GT `bbox_pct` is relative to this raster)")
+            elif img_key:
+                st.caption(
+                    f"Could not load page image for `{img_key}` — check **Page images directory**. "
+                    "Step F region crops need this file."
+                )
+            else:
+                st.caption("No `data.image` in manifest — full page and GT crops unavailable.")
+
+            st.markdown(f"### Step D — Match each GT region to prediction segments (`{match_mode_md}`)")
             st.markdown(
                 """
-**What this step is for.** You have one ordered list of **GT regions** (Step C) and one ordered list of **markdown segments** (Step B). They are usually *not* aligned one-to-one: one region might need several segments concatenated, or boundaries differ. Step D runs the **OmniDocBench-style quick matcher** (`eval/quick_match.py`) to decide, for *each* GT row, *which* segment indices to use and how to **merge** their text before scoring.
-
-**The heatmap below (when shown)** is the **raw** pairwise **NED** grid: cell *(i, j)* = normalized edit distance between normalized GT *i* and normalized segment *j*. With ``viridis_r`` (0 = best match), **lighter / yellow** ≈ **NED near 0** (more similar); **darker / purple** ≈ **NED near 1** (less similar). This matrix is only the *ingredient* cost data — the matcher then applies **global assignment** (Hungarian / `linear_sum_assignment` on a **transformed** matrix that allows merging or splitting prediction lines), **fuzzy** handling for leftovers, and **merging** of adjacent segments when that improves the match. Details: `run_quick_match_no_ignore` → `cal_final_match`, `process_matches`, `fuzzy_match_unmatched_items`, etc.
-
-**Step E** shows the **outcome**: for every GT index, the chosen **segment index range** `[start:end)`, the **merged raw prediction** string, and **NED** between that GT and the merged pred.
+**Simple vs quick vs full (short overview).** **Simple** — at most **one** pred segment per GT and vice versa; **Hungarian** on the raw NED matrix; leftover segments go unused. **Quick** — OmniDocBench **match_quick**: uses that cost data but runs **global assignment on a transformed matrix**, then merge/split / **fuzzy** steps so one GT can span **several** segments. **Full** — OmniDocBench **match_full** / **FuzzyMatch**: substring-style **combine**; **empty** segments are dropped before matching. None is the single “true” alignment; **NED reflects whichever pairing** each mode produces, so one mode can score better on some pages than another.
                 """.strip()
             )
-            gts_norm = [cfg.normalize(t) for t in gts_raw]
-            preds_norm = [cfg.normalize(t) for t in segs]
+            if match_mode_md == "quick":
+                st.markdown(
+                    """
+**What this step is for.** You have **GT regions** (Step C) and **markdown segments** (Step B). They are usually not aligned one-to-one. Step D runs **`quick_match`** (`eval/quick_match.py`): global assignment on a **transformed** cost matrix, fuzzy handling, and optional **merging** of adjacent segments.
+
+**The heatmap** is the **raw** pairwise **NED** grid. With ``viridis_r``, **lighter** ≈ NED near 0; **darker** ≈ NED near 1. The matcher does **not** just take argmin per row — see `run_quick_match_no_ignore`.
+
+**Step E** lists the chosen **segment range** `[start:end)`, **merged pred** text, and **NED** per GT.
+                    """.strip()
+                )
+            elif match_mode_md == "simple":
+                st.markdown(
+                    """
+**Simple match** (`eval/simple_match.py`): **one-to-one** assignment — each GT region maps to **at most one** pred segment, each segment to **at most one** GT, minimizing total NED via **`linear_sum_assignment`** (Hungarian) on the cost matrix below. Extra segments stay unmatched.
+
+**The heatmap** is exactly that **NED** cost matrix (lighter = lower NED). **Step E** shows which segment index (if any) was paired with each GT.
+                    """.strip()
+                )
+            else:
+                st.markdown(
+                    """
+**Full match** (`eval/full_match.py`): OmniDocBench **FuzzyMatch** / `match_gt2pred_full` — substring-style grouping and combine logic (empty pred segments are **dropped** before matching). The heatmap is still the **raw** pairwise NED grid for intuition; the **actual** alignment follows the fuzzy pipeline, not that matrix alone.
+
+**Step E** shows the resulting **segment range** and merged pred per GT (indices refer to the **original** segment list).
+                    """.strip()
+                )
+            gts_norm = [cfg_md.normalize(t) for t in gts_raw]
+            preds_norm = [cfg_md.normalize(t) for t in segs]
             if len(segs) and len(regions):
                 cm = compute_edit_distance_matrix_new(gts_norm, preds_norm)
-                st.caption(
-                    "Heatmap: **C[i,j]** = NED(norm_gt_i, norm_seg_j). The table in Step E comes from **`quick_match_gt_pred_lines`**, not from taking argmin per row of this grid."
-                )
+                if match_mode_md == "simple":
+                    hm_note = "This grid is the **cost matrix** for Hungarian assignment (Step E)."
+                elif match_mode_md == "quick":
+                    hm_note = "Ingredient costs for **quick_match** (assignment uses a transformed matrix + post-steps)."
+                else:
+                    hm_note = "Raw NED pairs; **full_match** uses `match_gt2pred_full`, not this matrix directly."
+                st.caption(f"Heatmap: **C[i,j]** = NED(norm_gt_i, norm_seg_j). {hm_note}")
                 fig_cm, ax_cm = plt.subplots(figsize=(max(6, len(segs) * 0.35), max(4, len(regions) * 0.35)))
                 im = ax_cm.imshow(cm, cmap="viridis_r", aspect="auto", vmin=0, vmax=1)
                 ax_cm.set_xlabel("pred segment j")
@@ -326,18 +460,31 @@ def main() -> None:
                 st.pyplot(fig_cm)
                 plt.close(fig_cm)
 
-            rows, qnotes = quick_match_gt_pred_lines(
-                gts_raw, gts_norm, segs, preds_norm, cfg.normalize
-            )
+            if match_mode_md == "quick":
+                rows, qnotes = quick_match_gt_pred_lines(
+                    gts_raw, gts_norm, segs, preds_norm, cfg_md.normalize
+                )
+            elif match_mode_md == "simple":
+                rows, qnotes = simple_match_gt_pred_lines(
+                    gts_raw, gts_norm, segs, preds_norm, cfg_md.normalize
+                )
+            else:
+                rows, qnotes = full_match_gt_pred_lines(
+                    gts_raw, gts_norm, segs, preds_norm, cfg_md.normalize
+                )
             for n in qnotes:
                 st.info(n)
             assign = {int(r["gt_index"]): r for r in rows}
-            st.markdown("### Step E — Result of quick_match: merged pred per GT region")
+            st.markdown(f"### Step E — Result of **{match_mode_md}** match: pred per GT region")
             st.dataframe(
                 {
                     "gt_index": [assign[i]["gt_index"] for i in sorted(assign.keys())],
                     "pred_segment_range": [
                         f'[{assign[i]["pred_segment_start"]}:{assign[i]["pred_segment_end"]})'
+                        for i in sorted(assign.keys())
+                    ],
+                    "gt_transcription": [
+                        (gts_raw[i][:200] + ("…" if len(gts_raw[i]) > 200 else ""))
                         for i in sorted(assign.keys())
                     ],
                     "pred_raw_merged": [assign[i]["pred_raw"][:200] for i in sorted(assign.keys())],
@@ -347,14 +494,29 @@ def main() -> None:
                 height=min(500, 40 + 28 * len(assign)),
             )
 
-            er_md = match_gt_to_prediction(regions, pred_text, config=cfg)
+            er_md = match_gt_to_prediction(regions, pred_text, config=cfg_md)
             st.metric("Mean NED (full pipeline)", f"{er_md.mean_ned:.4f}")
             st.metric("Micro NED", f"{er_md.micro_ned:.4f}")
 
-            st.markdown("### Step F — NED for one region (normalized strings)")
+            st.markdown("### Step F — NED for one region (normalized strings + GT crop)")
             ri = st.selectbox("Pick GT index (markdown path)", list(range(len(regions))), key="md_r")
             m = er_md.regions_matched[ri]
             gn, pn = m.gt_norm, m.pred_norm
+            page_rgb = (
+                _load_page_image_array(page_img_path)
+                if page_img_path is not None and page_img_path.is_file()
+                else None
+            )
+            if page_rgb is not None and ri < len(regions):
+                crop = _gt_region_crop_rgb(page_rgb, regions[ri])
+                if crop is not None and crop.size > 0:
+                    st.image(crop, caption=f"GT region {ri} crop (`bbox_pct` on manifest page)")
+                else:
+                    st.caption("No valid `bbox_pct` for this region — crop skipped.")
+            elif img_key:
+                st.caption("Page image missing or unreadable — crop skipped (check **Page images directory**).")
+            else:
+                st.caption("No manifest page image — crop skipped.")
             d, denom, ned = _ned_breakdown(gn, pn)
             st.latex(
                 r"\mathrm{NED} = \frac{d_{\mathrm{Lev}}(\mathrm{gt}, \mathrm{pred})}{\max(|\mathrm{gt}|, |\mathrm{pred}|, 1)}"
@@ -375,14 +537,6 @@ def main() -> None:
 
     # ----- Layout tab -----
     with tab_lo:
-        task_data = task.get("data") or {}
-        img_key = task_data.get("image")
-        page_img_path = (
-            _resolve_manifest_page_image(str(img_key), base, page_images_dir)
-            if img_key
-            else None
-        )
-
         st.markdown("### Step A — Load Docling JSON → text spans + boxes")
         if not js_path.is_file():
             st.warning(f"Missing file: {js_path}")

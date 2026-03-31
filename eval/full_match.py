@@ -9,9 +9,10 @@ using ``eval.edit_distance.levenshtein_distance`` instead of ``Levenshtein``.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Callable
 
-from .edit_distance import normalized_edit_distance
+from .edit_distance import levenshtein_distance, normalized_edit_distance
 
 
 class FuzzyMatch:
@@ -232,9 +233,13 @@ class FuzzyMatch:
         pos = 0
         last = len(window) - 1
         for i in range(len(line)):
-            if ret > dp[i][last]:
+            if last < len(dp[i]) and math.isfinite(dp[i][last]) and ret > dp[i][last]:
                 ret = dp[i][last]
                 pos = i
+        if not math.isfinite(ret):
+            # slide_window_dp leaves inf when len(line)==1 and len(window)>1 (inner loop starts at i=1).
+            d = levenshtein_distance(window, line)
+            return d, max(0, len(line) - 1)
         return int(ret), pos
 
     def _combine_match(
