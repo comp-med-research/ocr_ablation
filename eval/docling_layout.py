@@ -18,7 +18,10 @@ from .layout_geometry import (
     box_from_bbox_pct,
     docling_bbox_to_box_norm,
     iou,
+    iou_polygon_vs_box,
+    point_in_polygon,
     reading_order_sort_key,
+    rotated_polygon_from_bbox_pct,
 )
 from .matching import RegionMatch, TaskTextEvalResult, TextEvalConfig, _aggregate_metrics
 
@@ -150,6 +153,7 @@ def iter_docling_text_spans(doc: dict[str, Any], page_no: int = 1) -> list[Docli
 
 def _indices_overlapping_gt(
     gt: BoxNorm,
+    gt_poly: list[tuple[float, float]] | None,
     spans: list[DoclingTextSpan],
     *,
     min_iou: float,
@@ -157,12 +161,17 @@ def _indices_overlapping_gt(
 ) -> list[int]:
     idxs: list[int] = []
     for j, sp in enumerate(spans):
-        if iou(gt, sp.box) >= min_iou:
+        iv = iou_polygon_vs_box(gt_poly, sp.box) if gt_poly else iou(gt, sp.box)
+        if iv >= min_iou:
             idxs.append(j)
             continue
         if center_in_gt:
             cx, cy = sp.box.center()
-            if gt.x0 <= cx <= gt.x1 and gt.y0 <= cy <= gt.y1:
+            if gt_poly:
+                inside = point_in_polygon(cx, cy, gt_poly)
+            else:
+                inside = gt.x0 <= cx <= gt.x1 and gt.y0 <= cy <= gt.y1
+            if inside:
                 idxs.append(j)
     idxs.sort(key=lambda k: reading_order_sort_key(spans[k].box))
     return idxs
@@ -228,7 +237,14 @@ def match_gt_to_docling_layout(
             )
             continue
 
-        idxs = _indices_overlapping_gt(gt_box, spans, min_iou=min_iou, center_in_gt=True)
+        gt_poly = rotated_polygon_from_bbox_pct(bp) if isinstance(bp, dict) else None
+        idxs = _indices_overlapping_gt(
+            gt_box,
+            gt_poly,
+            spans,
+            min_iou=min_iou,
+            center_in_gt=True,
+        )
         pred_raw_merged = " ".join(spans[j].text for j in idxs)
         pn = cfg.normalize(pred_raw_merged)
         ned = float(
@@ -255,6 +271,48 @@ def match_gt_to_docling_layout(
 
     _aggregate_metrics(result)
     return result
+
+
+def match_docling_to_docling_layout(
+    gt_doc: dict[str, Any],
+    pred_doc: dict[str, Any],
+    *,
+    config: TextEvalConfig | None = None,
+    page_no: int = 1,
+    min_iou: float = 0.05,
+    doc_pick_notes: list[str] | None = None,
+) -> TaskTextEvalResult:
+    """
+    Pair **600 DPI Docling JSON** (``gt_doc``) against **300 DPI Docling JSON** (``pred_doc``).
+
+    Each GT text span on ``page_no`` becomes a synthetic region (``bbox_pct`` + ``transcription_gt``);
+    prediction merges overlapping spans on ``pred_doc`` (same rule as ``match_gt_to_docling_layout``).
+    """
+    gt_spans = iter_docling_text_spans(gt_doc, page_no=page_no)
+    regions: list[dict[str, Any]] = []
+    for i, sp in enumerate(gt_spans):
+        x0, y0, x1, y1 = sp.box.x0, sp.box.y0, sp.box.x1, sp.box.y1
+        w = (x1 - x0) * 100.0
+        h = (y1 - y0) * 100.0
+        x = x0 * 100.0
+        y = y0 * 100.0
+        regions.append(
+            {
+                "transcription_gt": sp.text,
+                "region_id": str(i),
+                "bbox_pct": {"x": x, "y": y, "width": w, "height": h},
+            }
+        )
+    notes = list(doc_pick_notes or [])
+    notes.append("dpi_compare: GT regions = Docling text spans (600 DPI export)")
+    return match_gt_to_docling_layout(
+        regions,
+        pred_doc,
+        config=config,
+        page_no=page_no,
+        min_iou=min_iou,
+        doc_pick_notes=notes,
+    )
 
 
 def match_gt_to_docling_json_path(

@@ -1,8 +1,9 @@
-"""Normalized 2D boxes (0–1, top-left origin) and IoU for layout alignment."""
+"""Normalized 2D geometry helpers (0-1, top-left origin) for layout alignment."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 
@@ -109,3 +110,144 @@ def reading_order_sort_key(box: BoxNorm) -> tuple[float, float]:
     y_mid = (box.y0 + box.y1) / 2.0
     row = round(y_mid, 1)
     return (row, box.x0)
+
+
+def rotated_polygon_from_bbox_pct(bp: dict[str, Any]) -> list[tuple[float, float]] | None:
+    """
+    Convert Label Studio bbox percentages to a normalized polygon.
+
+    Uses ``x,y,width,height,rotation`` where rotation is in degrees. Rotation is applied
+    around the rectangle center (Label Studio rectangle behavior).
+    """
+    try:
+        x = float(bp["x"]) / 100.0
+        y = float(bp["y"]) / 100.0
+        w = float(bp["width"]) / 100.0
+        h = float(bp["height"]) / 100.0
+    except (KeyError, TypeError, ValueError):
+        return None
+    rot = float(bp.get("rotation", 0.0) or 0.0)
+
+    pts = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+    if abs(rot) < 1e-9:
+        return pts
+
+    cx = x + (w / 2.0)
+    cy = y + (h / 2.0)
+    th = math.radians(rot)
+    c = math.cos(th)
+    s = math.sin(th)
+    out: list[tuple[float, float]] = []
+    for px, py in pts:
+        dx = px - cx
+        dy = py - cy
+        rx = cx + (dx * c) - (dy * s)
+        ry = cy + (dx * s) + (dy * c)
+        out.append((rx, ry))
+    return out
+
+
+def polygon_area(poly: list[tuple[float, float]]) -> float:
+    if len(poly) < 3:
+        return 0.0
+    a = 0.0
+    for i in range(len(poly)):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % len(poly)]
+        a += (x1 * y2) - (x2 * y1)
+    return abs(a) * 0.5
+
+
+def point_in_polygon(px: float, py: float, poly: list[tuple[float, float]]) -> bool:
+    """Ray-casting point-in-polygon; boundary counts as inside."""
+    if len(poly) < 3:
+        return False
+    inside = False
+    eps = 1e-12
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        cross = (px - x1) * (y2 - y1) - (py - y1) * (x2 - x1)
+        if abs(cross) <= eps and min(x1, x2) - eps <= px <= max(x1, x2) + eps and min(y1, y2) - eps <= py <= max(y1, y2) + eps:
+            return True
+        intersects = ((y1 > py) != (y2 > py)) and (
+            px < (x2 - x1) * (py - y1) / ((y2 - y1) + eps) + x1
+        )
+        if intersects:
+            inside = not inside
+    return inside
+
+
+def clip_polygon(subject: list[tuple[float, float]], clipper: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """
+    Sutherland-Hodgman polygon clipping for convex clipper.
+
+    Returns the intersection polygon between ``subject`` and ``clipper``.
+    """
+    if len(subject) < 3 or len(clipper) < 3:
+        return []
+
+    def _signed_area(poly: list[tuple[float, float]]) -> float:
+        s = 0.0
+        for i in range(len(poly)):
+            x1, y1 = poly[i]
+            x2, y2 = poly[(i + 1) % len(poly)]
+            s += (x1 * y2) - (x2 * y1)
+        return 0.5 * s
+
+    ccw = _signed_area(clipper) >= 0.0
+
+    def inside(p: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> bool:
+        cross = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+        return cross >= 0 if ccw else cross <= 0
+
+    def intersection(
+        s: tuple[float, float],
+        e: tuple[float, float],
+        a: tuple[float, float],
+        b: tuple[float, float],
+    ) -> tuple[float, float]:
+        x1, y1 = s
+        x2, y2 = e
+        x3, y3 = a
+        x4, y4 = b
+        den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(den) < 1e-12:
+            return e
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den
+        return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+
+    output = subject[:]
+    for i in range(len(clipper)):
+        a = clipper[i]
+        b = clipper[(i + 1) % len(clipper)]
+        inp = output
+        output = []
+        if not inp:
+            break
+        s = inp[-1]
+        for e in inp:
+            if inside(e, a, b):
+                if not inside(s, a, b):
+                    output.append(intersection(s, e, a, b))
+                output.append(e)
+            elif inside(s, a, b):
+                output.append(intersection(s, e, a, b))
+            s = e
+    return output
+
+
+def iou_polygon_vs_box(poly: list[tuple[float, float]], box: BoxNorm) -> float:
+    """IoU where GT may be rotated polygon and prediction is axis-aligned box."""
+    if len(poly) < 3:
+        return 0.0
+    bpoly = [(box.x0, box.y0), (box.x1, box.y0), (box.x1, box.y1), (box.x0, box.y1)]
+    inter_poly = clip_polygon(poly, bpoly)
+    inter = polygon_area(inter_poly)
+    if inter <= 0:
+        return 0.0
+    a_poly = polygon_area(poly)
+    a_box = box.area
+    union = a_poly + a_box - inter
+    return inter / union if union > 0 else 0.0

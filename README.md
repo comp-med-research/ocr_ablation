@@ -170,6 +170,15 @@ streamlit run streamlit_alignment_explorer.py
 
 The **Page images directory** field defaults to ``test_cases15``; manifest paths like ``…/uuid-00000725.jpg`` are resolved to ``test_cases15/00000725.jpg``.
 
+**DPI comparison** (``streamlit_dpi_compare.py``): two folders (**600 DPI = GT**, **300 DPI = pred**). For **Docling** ``docling_output.json`` in both folders, the **Per-page** view mirrors the alignment explorer **JSON layout** tab: IoU/center matching of **600 DPI** text spans to **300 DPI** spans, NED per span, aggregate metrics, and box overlay on the **600 DPI** PDF page. Non-Docling pairs get simple text NED + raw text only. Reads ``results.json`` for PDF paths used as the plot background:
+
+```bash
+cd ocr_ablation
+streamlit run streamlit_dpi_compare.py
+```
+
+Default directories point at ``../dpi_comparison/my_compare/600dpi`` and ``../dpi_comparison/my_compare/300dpi`` when present.
+
 **Text match modes** (markdown tab, Step D): **simple** — one-to-one Hungarian on NED, unmatched segments ignored. **quick** — OmniDocBench ``match_quick`` (transformed cost matrix + merge/split + fuzzy; multiple segments per GT possible). **full** — OmniDocBench ``match_full`` / FuzzyMatch (substring combine; empty segments dropped). They can yield different NEDs per task because NED depends on the induced alignment, not because one mode is always “more accurate.”
 
 If Linux logs **inotify watch limit reached**, the repo includes ``.streamlit/config.toml`` that disables the file watcher (refresh the browser after edits), or run: ``STREAMLIT_SERVER_FILE_WATCHER_TYPE=none streamlit run …``. Optionally raise system limits: ``sudo sysctl fs.inotify.max_user_watches=524288``.

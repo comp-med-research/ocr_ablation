@@ -61,3 +61,5 @@ results/
 
 test_cases15/
 streamlit_demo/
+streamlit_alignment_explorer_v2.py
+streamlit_dpi_compare.py
