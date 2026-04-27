@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .md_segment import prediction_segments
-from .normalize import normalize_text
+from .normalize import normalize_text, strip_vlm_output_artifacts
 from .full_match import full_match_gt_pred_lines
 from .quick_match import quick_match_gt_pred_lines
 from .simple_match import simple_match_gt_pred_lines
@@ -25,6 +25,13 @@ class TextEvalConfig:
     collapse_repeats: bool = True
     max_char_repeat: int = 3
     lowercase: bool = False
+    #: OmniDocBench-style steps (fences, circled Unicode, fullwidth map, ``____`` / four spaces).
+    #: When True, generic ``collapse_repeats`` is not applied (Omni handles ``_`` / spaces).
+    omnidocbench_preprocess: bool = True
+    #: Omni ``clean_string`` (word chars + CJK only); very aggressive — default off.
+    omnidocbench_clean_string: bool = False
+    #: Strip Markdown/HTML tokens (fences, emphasis, headings, lists, tables, links, …).
+    strip_markdown_tokens: bool = True
     #: If True, split prediction with ``md_segment.prediction_segments_from_markdown``
     #: (code/tables/math first, then prose). If False, use blank-line ``segment_prediction`` only.
     use_markdown_structure: bool = True
@@ -42,6 +49,9 @@ class TextEvalConfig:
             collapse_repeats=self.collapse_repeats,
             max_char_repeat=self.max_char_repeat,
             lowercase=self.lowercase,
+            omnidocbench_preprocess=self.omnidocbench_preprocess,
+            omnidocbench_clean_string=self.omnidocbench_clean_string,
+            strip_markdown_tokens=self.strip_markdown_tokens,
         )
 
 
@@ -71,6 +81,12 @@ class TaskTextEvalResult:
     match_mode: MatchMode = "quick"
     #: ``text`` (md_segment + match_mode) or ``layout-docling`` (bbox overlap on Docling JSON).
     alignment: str = "text"
+    #: Set by ``omnidocbench_eval.match_gt_to_prediction_omnidocbench_style`` only.
+    document_gt_norm: str = ""
+    document_pred_norm: str = ""
+    document_ned: float | None = None
+    document_cer: float | None = None
+    document_wer: float | None = None
 
 
 def match_gt_to_prediction(
@@ -96,7 +112,7 @@ def match_gt_to_prediction(
     ids = [str(r.get("region_id", "")) for r in regions]
     n = len(gts_raw)
     pred_segments = prediction_segments(
-        prediction_full_text,
+        strip_vlm_output_artifacts(prediction_full_text or ""),
         use_markdown_structure=cfg.use_markdown_structure,
     )
     m = len(pred_segments)

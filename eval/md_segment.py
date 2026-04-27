@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from typing import Callable, Literal
 
+from .normalize import strip_vlm_output_artifacts
+
 PieceKind = Literal["text", "code", "html_table", "md_table", "math"]
 
 _FENCE = re.compile(r"```([^\n`]*)\n(.*?)```", re.DOTALL)
@@ -109,6 +111,91 @@ def split_display_math(s: str) -> list[tuple[PieceKind, str]]:
     if last < len(s):
         out.append(("text", s[last:]))
     return out if out else [("text", s)]
+
+
+def _strip_html_tags(text: str) -> str:
+    return re.sub(r"<[^>]+>", " ", text)
+
+
+def strip_markdown_for_alignment(text: str) -> str:
+    """
+    Strip markdown structure and decoration from model output before GT alignment.
+
+    Splits the document like ``prediction_segments_from_markdown`` (fences, tables, math),
+    then flattens each piece to plain text so matchers compare content, not markup.
+    """
+    if not text or not text.strip():
+        return ""
+
+    text = strip_vlm_output_artifacts(text)
+
+    pieces: list[tuple[PieceKind, str]] = [("text", text)]
+
+    def apply_splitter(
+        splitter: Callable[[str], list[tuple[PieceKind, str]]],
+        only_text: bool = True,
+    ) -> None:
+        nonlocal pieces
+        new_pieces: list[tuple[PieceKind, str]] = []
+        for kind, chunk in pieces:
+            if only_text and kind != "text":
+                new_pieces.append((kind, chunk))
+                continue
+            if not chunk:
+                continue
+            new_pieces.extend(splitter(chunk))
+        pieces = new_pieces
+
+    apply_splitter(split_code_fences)
+    apply_splitter(split_html_tables)
+    apply_splitter(split_md_pipe_tables)
+    apply_splitter(split_display_math)
+
+    out_chunks: list[str] = []
+    text_paras: list[str] = []
+    for kind, chunk in pieces:
+        if not chunk.strip():
+            continue
+        if kind == "text":
+            text_paras.extend(_text_to_paragraph_segments(chunk))
+        elif kind == "code":
+            if text_paras:
+                out_chunks.extend(text_paras)
+                text_paras = []
+            out_chunks.append(chunk.strip())
+        elif kind == "html_table":
+            if text_paras:
+                out_chunks.extend(text_paras)
+                text_paras = []
+            t = _strip_html_tags(chunk)
+            t = re.sub(r"\s+", " ", t)
+            out_chunks.append(light_strip_md_paragraph(t))
+        elif kind == "md_table":
+            if text_paras:
+                out_chunks.extend(text_paras)
+                text_paras = []
+            lines = []
+            for line in chunk.splitlines():
+                s = line.strip()
+                if not s or re.match(r"^[\|\s:\-]+$", re.sub(r"\s+", "", s)):
+                    continue
+                s = s.strip("|").replace("|", " ")
+                lines.append(s)
+            joined = "\n".join(lines)
+            out_chunks.append(light_strip_md_paragraph(joined))
+        elif kind == "math":
+            if text_paras:
+                out_chunks.extend(text_paras)
+                text_paras = []
+            body = chunk.strip()
+            body = re.sub(r"^\$+|\$+$", "", body).strip()
+            out_chunks.append(body)
+    if text_paras:
+        out_chunks.extend(text_paras)
+
+    # Keep paragraph/block boundaries so downstream segmentation returns multiple j segments.
+    merged = "\n\n".join(c.strip() for c in out_chunks if c.strip())
+    return merged.strip()
 
 
 def light_strip_md_paragraph(p: str) -> str:

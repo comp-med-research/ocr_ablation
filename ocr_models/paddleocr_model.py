@@ -116,6 +116,19 @@ class PaddleOCRModel(BaseOCR):
                 json.dumps(serial, ensure_ascii=False, indent=2, default=str),
                 encoding="utf-8",
             )
+            try:
+                from eval.paddleocr_docling_export import paddle_item_to_docling_document
+
+                first = serial[0] if isinstance(serial, list) and serial else serial
+                if isinstance(first, dict):
+                    doc = paddle_item_to_docling_document(first)
+                    if doc:
+                        (nd / "docling_document.json").write_text(
+                            json.dumps(doc, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+            except Exception:
+                pass
         return out
 
 
@@ -159,13 +172,23 @@ def _serialize_result_for_json(res):
     return _jsonify(res)
 
 
+# Keys whose values are full image tensors (huge JSON); omit from paddleocr_predict.json.
+_OMIT_JSON_KEYS = frozenset({"input_img", "output_img", "rot_img"})
+
+
 def _jsonify(obj):
     if isinstance(obj, (str, int, float, bool)) or obj is None:
         return obj
     if isinstance(obj, (list, tuple)):
         return [_jsonify(x) for x in obj]
     if isinstance(obj, dict):
-        return {str(k): _jsonify(v) for k, v in obj.items()}
+        out: dict = {}
+        for k, v in obj.items():
+            sk = str(k)
+            if sk in _OMIT_JSON_KEYS and isinstance(v, list):
+                continue
+            out[sk] = _jsonify(v)
+        return out
     if hasattr(obj, "tolist"):
         try:
             return obj.tolist()

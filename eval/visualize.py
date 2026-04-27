@@ -67,6 +67,14 @@ def render_task_html(
             """
         )
 
+    doc_line = ""
+    if eval_result.document_ned is not None and eval_result.document_cer is not None:
+        dw = eval_result.document_wer if eval_result.document_wer is not None else float("nan")
+        doc_line = (
+            f'<p><strong>Document-level (Omni-style)</strong> NED {eval_result.document_ned:.4f} · '
+            f"CER {eval_result.document_cer:.4f} · WER {dw:.4f}</p>"
+        )
+
     summary = f"""
     <div class="summary">
       <p><strong>Task</strong> {html.escape(str(task_id))}</p>
@@ -75,6 +83,7 @@ def render_task_html(
       Regions: {len(eval_result.regions_matched)} · Mean NED: {eval_result.mean_ned:.4f} ·
       Micro NED: {eval_result.micro_ned:.4f} · Mean similarity: {eval_result.mean_similarity:.4f}</p>
       <p>Prediction split into <strong>{len(eval_result.pred_segments)}</strong> paragraph segment(s).</p>
+      {doc_line}
       {('<p class="note">' + html.escape("; ".join(eval_result.notes)) + "</p>") if eval_result.notes else ""}
     </div>
     """
@@ -175,6 +184,12 @@ def write_eval_report(
         ],
         "pred_segments": eval_result.pred_segments,
     }
+    if eval_result.document_ned is not None:
+        payload["document_ned"] = eval_result.document_ned
+        payload["document_cer"] = eval_result.document_cer
+        payload["document_wer"] = eval_result.document_wer
+        payload["document_gt_char_len"] = len(eval_result.document_gt_norm)
+        payload["document_pred_char_len"] = len(eval_result.document_pred_norm)
     if manifest_task:
         payload["manifest_task"] = {
             "task_id": manifest_task.get("task_id"),

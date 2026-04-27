@@ -12,9 +12,10 @@ per-box crops; GT boxes only define **what** to score after alignment.
    (fenced code, HTML/pipe tables, display math, then prose with light MD stripping;
    see ``eval/md_segment.py``). Use ``--legacy-paragraph-segments`` for blank-line-only
    splits. Then OmniDocBench-style matching: **quick** (default), **simple** (Hungarian), or
-   **full** (``FuzzyMatch``); see ``--match-mode``. For Docling **JSON** with boxes, use
-   ``--alignment layout-docling`` (GT ``bbox_pct`` vs ``texts[].prov``; see ``eval/docling_layout.py``).
-   Install ``Levenshtein`` for speed (see ``requirements.txt``).
+   **full** (``FuzzyMatch``); see ``--match-mode``. For **layout IoU** (GT ``bbox_pct`` vs model
+   boxes), use ``--alignment layout-docling`` (``docling_document.json``), ``layout-paddle-json``
+   (``paddleocr_predict.json``), or ``layout-native-json`` (either filename). See ``eval/docling_layout.py``
+   and ``eval/paddle_layout.py``. Install ``Levenshtein`` for speed (see ``requirements.txt``).
 3. Score **NED** (normalized edit distance) on normalized text; write HTML + JSON
    so you can audit alignments.
 
@@ -62,6 +63,8 @@ if str(ROOT) not in sys.path:
 from eval.manifest import build_manifest_from_ls_export, load_manifest, save_manifest
 from eval.docling_layout import match_gt_to_docling_json_path
 from eval.matching import MatchMode, TextEvalConfig, match_gt_to_prediction
+from eval.omnidocbench_eval import match_gt_to_prediction_omnidocbench_style
+from eval.paddle_layout import match_gt_to_paddle_predict_json_path
 from eval.pred_loader import load_prediction_text
 from eval.visualize import write_eval_report
 
@@ -192,6 +195,35 @@ def main() -> int:
     p.add_argument("--no-strip-md-images", action="store_true")
     p.add_argument("--no-strip-fences", action="store_true")
     p.add_argument(
+        "--no-omnidocbench-preprocess",
+        action="store_true",
+        help=(
+            "Disable OmniDocBench-style steps (typed ``` fences, circled Unicode, fullwidth map, "
+            "underscore/space run caps). Restores legacy generic repeat collapse."
+        ),
+    )
+    p.add_argument(
+        "--omnidocbench-clean-string",
+        action="store_true",
+        help=(
+            "OmniDocBench clean_string: keep only word chars and CJK (removes spaces between "
+            "English words). Usually off."
+        ),
+    )
+    p.add_argument(
+        "--no-strip-markdown-tokens",
+        action="store_true",
+        help="Disable heavy Markdown/HTML stripping (fences, emphasis, headings, lists, tables, links).",
+    )
+    p.add_argument(
+        "--no-native-json-schema",
+        action="store_true",
+        help=(
+            "When reading JSON predictions, do not use Paddle/Docling-specific extractors "
+            "for paddleocr_predict.json / docling_document.json (use generic JSON heuristics)."
+        ),
+    )
+    p.add_argument(
         "--legacy-paragraph-segments",
         action="store_true",
         help="Split prediction on blank lines only (ignore markdown structure extraction)",
@@ -224,11 +256,22 @@ def main() -> int:
     p.add_argument(
         "--alignment",
         type=str,
-        choices=("text", "layout-docling"),
+        choices=("text", "layout-docling", "layout-paddle-json", "layout-native-json"),
         default="text",
         help=(
             "text: full-page string + md_segment + match_mode (default). "
-            "layout-docling: Docling DoclingDocument JSON + GT bbox_pct → IoU/center overlap, merge spans."
+            "layout-docling: Docling DoclingDocument JSON + GT bbox_pct → IoU/center overlap. "
+            "layout-paddle-json: paddleocr_predict.json + GT bbox_pct → IoU. "
+            "layout-native-json: Docling JSON or Paddle predict JSON from pred path by filename."
+        ),
+    )
+    p.add_argument(
+        "--eval-style",
+        choices=("labelstudio", "omnidocbench"),
+        default="labelstudio",
+        help=(
+            "labelstudio: GT regions in manifest order (default). "
+            "omnidocbench: bbox reading-order GT + document-level NED/CER/WER (text alignment only)."
         ),
     )
     p.add_argument(
@@ -254,6 +297,12 @@ def main() -> int:
         help="Minimum IoU (or center-in-GT) to assign a Docling text span to a GT region",
     )
     args = p.parse_args()
+
+    if args.eval_style == "omnidocbench" and args.alignment != "text":
+        print(
+            "Note: --eval-style omnidocbench only fills document_* metrics on the text alignment path.",
+            file=sys.stderr,
+        )
 
     if not args.ls_export and args.manifest is None:
         p.error("Provide --ls-export and/or --manifest")
@@ -281,9 +330,66 @@ def main() -> int:
         lowercase=args.lowercase,
         strip_md_images=not args.no_strip_md_images,
         strip_fences=not args.no_strip_fences,
+        omnidocbench_preprocess=not args.no_omnidocbench_preprocess,
+        omnidocbench_clean_string=args.omnidocbench_clean_string,
+        strip_markdown_tokens=not args.no_strip_markdown_tokens,
         use_markdown_structure=not args.legacy_paragraph_segments,
         match_mode=cast(MatchMode, args.match_mode),
     )
+
+    def _load_pred(path: Path) -> str:
+        return load_prediction_text(
+            path,
+            pred_format=args.pred_format,
+            json_key=args.pred_json_key,
+            native_json_schema=not args.no_native_json_schema,
+        )
+
+    def _alignment_eval(regions: list, pred_path: Path, *, inner_id: int):
+        a = args.alignment
+        if a == "layout-docling":
+            return match_gt_to_docling_json_path(
+                regions,
+                pred_path,
+                config=cfg,
+                page_no=args.docling_page_no,
+                doc_index=args.docling_doc_index,
+                inner_id=inner_id,
+                min_iou=args.layout_min_iou,
+            )
+        if a == "layout-paddle-json":
+            return match_gt_to_paddle_predict_json_path(
+                regions,
+                pred_path,
+                config=cfg,
+                min_iou=args.layout_min_iou,
+            )
+        if a == "layout-native-json":
+            nl = pred_path.name.lower()
+            if nl == "paddleocr_predict.json":
+                return match_gt_to_paddle_predict_json_path(
+                    regions,
+                    pred_path,
+                    config=cfg,
+                    min_iou=args.layout_min_iou,
+                )
+            if nl == "docling_document.json":
+                return match_gt_to_docling_json_path(
+                    regions,
+                    pred_path,
+                    config=cfg,
+                    page_no=args.docling_page_no,
+                    doc_index=args.docling_doc_index,
+                    inner_id=inner_id,
+                    min_iou=args.layout_min_iou,
+                )
+            raise ValueError(
+                "layout-native-json expects pred file named paddleocr_predict.json or docling_document.json"
+            )
+        pred_text = _load_pred(pred_path).replace("\n\n--- Page Break ---\n\n", "\n\n")
+        if args.eval_style == "omnidocbench":
+            return match_gt_to_prediction_omnidocbench_style(regions, pred_text, config=cfg)
+        return match_gt_to_prediction(regions, pred_text, config=cfg)
 
     pred_map: dict[str, str] | None = None
     pred_map_path: Path | None = None
@@ -301,31 +407,15 @@ def main() -> int:
         if not task:
             print(f"Task id {args.task_id} not in manifest", file=sys.stderr)
             return 1
-        if args.alignment == "layout-docling":
-            try:
-                er = match_gt_to_docling_json_path(
-                    task["regions"],
-                    args.pred,
-                    config=cfg,
-                    page_no=args.docling_page_no,
-                    doc_index=args.docling_doc_index,
-                    inner_id=int(task.get("inner_id") or 1),
-                    min_iou=args.layout_min_iou,
-                )
-            except (json.JSONDecodeError, OSError, ValueError) as e:
-                print(f"Failed layout-docling JSON {args.pred}: {e}", file=sys.stderr)
-                return 1
-        else:
-            try:
-                pred_text = load_prediction_text(
-                    args.pred,
-                    pred_format=args.pred_format,
-                    json_key=args.pred_json_key,
-                )
-            except (json.JSONDecodeError, OSError, ValueError) as e:
-                print(f"Failed to load prediction {args.pred}: {e}", file=sys.stderr)
-                return 1
-            er = match_gt_to_prediction(task["regions"], pred_text, config=cfg)
+        try:
+            er = _alignment_eval(
+                task["regions"],
+                args.pred.resolve(),
+                inner_id=int(task.get("inner_id") or 1),
+            )
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            print(f"Failed prediction / alignment {args.pred}: {e}", file=sys.stderr)
+            return 1
         er.task_id = task.get("task_id")
         out_html = args.out / f"task_{args.task_id}_alignment.html"
         write_eval_report(
@@ -372,32 +462,15 @@ def main() -> int:
                 hint = "  (hint: check --pred-dir and --pred-suffix)"
             print(f"skip task {tid}: missing {pred_path}{hint}", file=sys.stderr)
             continue
-        if args.alignment == "layout-docling":
-            try:
-                er = match_gt_to_docling_json_path(
-                    task["regions"],
-                    pred_path,
-                    config=cfg,
-                    page_no=args.docling_page_no,
-                    doc_index=args.docling_doc_index,
-                    inner_id=int(task.get("inner_id") or 1),
-                    min_iou=args.layout_min_iou,
-                )
-            except (json.JSONDecodeError, OSError, ValueError) as e:
-                print(f"skip task {tid}: layout-docling {pred_path}: {e}", file=sys.stderr)
-                continue
-        else:
-            try:
-                pred_text = load_prediction_text(
-                    pred_path,
-                    pred_format=args.pred_format,
-                    json_key=args.pred_json_key,
-                )
-            except (json.JSONDecodeError, OSError, ValueError) as e:
-                print(f"skip task {tid}: could not read {pred_path}: {e}", file=sys.stderr)
-                continue
-            pred_text = pred_text.replace("\n\n--- Page Break ---\n\n", "\n\n")
-            er = match_gt_to_prediction(task["regions"], pred_text, config=cfg)
+        try:
+            er = _alignment_eval(
+                task["regions"],
+                pred_path,
+                inner_id=int(task.get("inner_id") or 1),
+            )
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            print(f"skip task {tid}: {pred_path}: {e}", file=sys.stderr)
+            continue
         er.task_id = tid
         safe = str(tid).replace("/", "_")
         out_html = args.out / f"task_{safe}_alignment.html"
